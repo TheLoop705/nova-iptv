@@ -13,11 +13,13 @@ import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
 import { NovaMark } from '../components/NovaMark';
 import { GuideScreen } from './GuideScreen';
+import { HomeScreen } from './HomeScreen';
 import { VodScreen } from './VodScreen';
 import { SearchScreen } from './SearchScreen';
 import { SettingsScreen } from './SettingsScreen';
 
 const NAV: { id: Screen; label: string; icon: string }[] = [
+  { id: 'home', label: 'Home', icon: 'home-outline' },
   { id: 'guide', label: 'Live TV', icon: 'television-classic' },
   { id: 'movies', label: 'Movies', icon: 'movie-open-outline' },
   { id: 'series', label: 'Series', icon: 'television-play' },
@@ -199,6 +201,8 @@ function Content({ screen }: { screen: Screen }) {
   if (!hasChannels && (status === 'loading' || status === 'idle')) return <Loading />;
   if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
   switch (screen) {
+    case 'home':
+      return <HomeScreen />;
     case 'guide':
       return <GuideScreen />;
     case 'movies':

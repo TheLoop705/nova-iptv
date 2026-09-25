@@ -1,5 +1,5 @@
 import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } from '../types';
-import { useSettings } from '../store/settings';
+import { useSettings, watchId } from '../store/settings';
 import { useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
 import { xtreamMovieInfo, xtreamMovieUrl, xtreamSeriesInfo } from './xtream';
@@ -26,7 +26,10 @@ export function playMovie(item: VodItem, fromStart = false) {
   const key = movieKey(item);
   const progress = useSettings.getState().vodProgress[key];
   const pid = useLibrary.getState().playlistId;
-  if (pid) useSettings.getState().pushRecentMovie(pid, item);
+  if (pid) {
+    useSettings.getState().pushRecentMovie(pid, item);
+    useSettings.getState().pushHistory(pid, { kind: 'movie', id: watchId.movie(item.id), item, at: Date.now() });
+  }
   usePlayer.getState().playVod(
     { kind: 'vod', key, title: item.name, subtitle: item.year, url, poster: item.poster, userAgent: activePlaylist()?.userAgent },
     fromStart ? undefined : progress?.pos
@@ -59,9 +62,15 @@ function episodeItem(series: SeriesItem, ep: Episode) {
   };
 }
 
+function recordEpisode(series: SeriesItem, ep: Episode) {
+  const pid = useLibrary.getState().playlistId;
+  if (pid) useSettings.getState().pushHistory(pid, { kind: 'episode', id: watchId.series(series.id), series, episode: ep, at: Date.now() });
+}
+
 export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
   const progress = useSettings.getState().vodProgress[episodeKey(ep)];
   const after = nextEpisode(series, ep);
+  recordEpisode(series, ep);
   usePlayer.getState().playVod(
     { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined },
     fromStart ? undefined : progress?.pos
@@ -74,13 +83,29 @@ export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'nex
     for (const season of info.seasons) {
       const ep = season.episodes.find((e) => episodeKey(e) === next.key);
       if (!ep) continue;
-      const series = { seriesId, name: next.title, poster: next.poster } as SeriesItem;
+      const known = useSettings.getState().history[useLibrary.getState().playlistId ?? '']?.find((h) => h.kind === 'episode' && h.series.seriesId === seriesId);
+      const series = known?.kind === 'episode' ? known.series : ({ id: String(seriesId), seriesId, name: next.title, poster: next.poster } as SeriesItem);
       const after = nextEpisode(series, ep);
+      recordEpisode(series, ep);
       usePlayer.getState().playVod({ ...next, next: after ? episodeItem(series, after) : undefined });
       return;
     }
   }
   usePlayer.getState().playVod(next);
+}
+
+/** Resume an episode from Home: loads the season list first so "Up next" keeps working. */
+export async function resumeEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
+  if (!seriesInfoCache.has(series.seriesId)) await loadSeriesInfo(series).catch(() => null);
+  playEpisode(series, ep, fromStart);
+}
+
+/** Home: pick a series up where you left it — resume the episode, or start the next one once it's watched. */
+export async function continueSeries(series: SeriesItem, ep: Episode) {
+  if (!seriesInfoCache.has(series.seriesId)) await loadSeriesInfo(series).catch(() => null);
+  const pr = useSettings.getState().vodProgress[episodeKey(ep)];
+  const next = pr?.done && !(pr.pos > 0) ? nextEpisode(series, ep) : undefined;
+  playEpisode(series, next ?? ep);
 }
 
 export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {

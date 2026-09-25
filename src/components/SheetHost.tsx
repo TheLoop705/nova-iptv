@@ -7,7 +7,7 @@ import { colors, radius, useLayout } from '../theme';
 import { Focusable } from './Focusable';
 import { Icon } from './Icon';
 
-/** Modal option list (TiviMate-style side menu on TV, bottom sheet on phones). */
+/** Modal option list (side menu on TV, bottom sheet on phones). */
 export function SheetHost() {
   const sheet = useUI((s) => s.sheet);
   const close = useUI((s) => s.closeSheet);

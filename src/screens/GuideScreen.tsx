@@ -20,7 +20,7 @@ import { Focusable } from '../components/Focusable';
 const HALF = 30 * 60000;
 const DAY = 86400000;
 const align = (t: number) => Math.floor(t / HALF) * HALF;
-/** Window start for "now": keep at least ~10 minutes of the past visible, like TiviMate */
+/** Window start for "now": keep at least ~10 minutes of the past visible */
 const nowWindow = (t: number) => align(t - 10 * 60000);
 
 type Zone = 'grid' | 'channels' | 'groups';
@@ -641,7 +641,7 @@ function HeaderBtn({ icon, label, onPress, s, tv }: { icon?: string; label?: str
   );
 }
 
-/** Always-visible category list on the left of the TV guide (TiviMate-style). */
+/** Always-visible category list on the left of the TV guide. */
 function CategoryColumn({
   groups,
   index,

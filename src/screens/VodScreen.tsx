@@ -249,7 +249,8 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
                         item={it}
                         width={posterW}
                         focused={zone === 'grid' && gi === idx}
-                        progress={prog ? prog.pos / prog.dur : 0}
+                        progress={prog && prog.dur > 0 ? prog.pos / prog.dur : 0}
+                        watched={!!prog?.done}
                         tv={tv}
                         s={s}
                         onPress={() => {
@@ -275,6 +276,7 @@ const PosterCard = React.memo(function PosterCard({
   width,
   focused,
   progress,
+  watched,
   tv,
   s,
   onPress,
@@ -283,6 +285,7 @@ const PosterCard = React.memo(function PosterCard({
   width: number;
   focused: boolean;
   progress: number;
+  watched?: boolean;
   tv: boolean;
   s: (n: number) => number;
   onPress: () => void;
@@ -305,6 +308,11 @@ const PosterCard = React.memo(function PosterCard({
               <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: colors.videoScrim, borderRadius: radius.xs, paddingHorizontal: 5, paddingVertical: 1, flexDirection: 'row', alignItems: 'center' }}>
                 <Icon name="star" size={tv ? s(10) : 11} color={colors.star} />
                 <Text style={{ color: colors.onVideo, fontSize: tv ? s(10.5) : 11, fontWeight: '700', marginLeft: 2, fontVariant: ['tabular-nums'] }}>{Number(item.rating).toFixed(1)}</Text>
+              </View>
+            ) : null}
+            {watched && !(progress > 0) ? (
+              <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: colors.videoScrim, borderRadius: radius.pill, padding: 2 }}>
+                <Icon name="check-circle" size={tv ? s(13) : 15} color={colors.success} />
               </View>
             ) : null}
             {progress > 0 ? (

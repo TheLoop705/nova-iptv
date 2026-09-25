@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Playlist, SeriesItem, VodItem } from '../types';
+import { Platform } from 'react-native';
+import type { Episode, Playlist, SeriesItem, VodItem } from '../types';
 import { getItem, onRemoteChange, setItem } from '../services/storage';
 import { applyOps, type Doc } from '../utils/docPatch';
 
@@ -37,10 +38,31 @@ export const defaultPrefs: Prefs = {
 export type VodFav = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };
 
 export interface VodProgress {
+  /** resume position in seconds (0 once finished) */
   pos: number;
   dur: number;
   at: number;
+  /** watched to the end at least once */
+  done?: boolean;
 }
+
+/** Something watched, for Home's "Recently watched" row. One entry per channel, movie or series. */
+export type WatchEntry =
+  | { kind: 'live'; id: string; channelId: string; at: number }
+  | { kind: 'movie'; id: string; item: VodItem; at: number }
+  | { kind: 'episode'; id: string; series: SeriesItem; episode: Episode; at: number };
+
+export const watchId = {
+  live: (channelId: string) => `live:${channelId}`,
+  movie: (movieId: string) => `movie:${movieId}`,
+  /** a series keeps only its latest episode */
+  series: (seriesId: string) => `series:${seriesId}`,
+};
+
+const HISTORY_MAX = 40;
+
+/** Counts as watched once the remaining time is under 5% (at least the last minute: credits). */
+export const isFinished = (pos: number, dur: number) => dur > 0 && pos >= dur - Math.max(60, dur * 0.05);
 
 interface Persisted {
   playlists: Playlist[];
@@ -53,6 +75,8 @@ interface Persisted {
   vodProgress: Record<string, VodProgress>;
   vodFavorites: Record<string, VodFav[]>;
   recentMovies: Record<string, VodItem[]>;
+  /** per playlist, newest first */
+  history: Record<string, WatchEntry[]>;
   prefs: Prefs;
 }
 
@@ -68,6 +92,10 @@ interface SettingsState extends Persisted {
   setLastGroup: (playlistId: string, groupId: string) => void;
   toggleHiddenGroup: (playlistId: string, groupId: string) => void;
   saveVodProgress: (key: string, pos: number, dur: number) => void;
+  /** mark a movie/episode as watched (or not) by hand */
+  setWatched: (key: string, done: boolean) => void;
+  pushHistory: (playlistId: string, entry: WatchEntry) => void;
+  removeHistory: (playlistId: string, id: string) => void;
   toggleVodFavorite: (playlistId: string, fav: VodFav) => void;
   pushRecentMovie: (playlistId: string, item: VodItem) => void;
   setPrefs: (p: Partial<Prefs>) => void;
@@ -84,6 +112,7 @@ const initial: Persisted = {
   vodProgress: {},
   vodFavorites: {},
   recentMovies: {},
+  history: {},
   prefs: defaultPrefs,
 };
 
@@ -127,12 +156,30 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set((s) => ({ hiddenGroups: { ...s.hiddenGroups, [pid]: toggle(s.hiddenGroups[pid], gid) } })),
   saveVodProgress: (key, pos, dur) =>
     set((s) => {
+      const prev = s.vodProgress[key];
       const vodProgress = { ...s.vodProgress };
-      // Finished (or barely started) items drop out of "continue watching"
-      if (dur > 0 && (pos > dur - 60 || pos < 15)) delete vodProgress[key];
-      else vodProgress[key] = { pos, dur, at: Date.now() };
+      const at = Date.now();
+      if (isFinished(pos, dur)) vodProgress[key] = { pos: 0, dur, at, done: true };
+      else if (pos < 15) {
+        // barely started: nothing to resume, but keep a "watched" mark from an earlier viewing
+        if (prev?.done) vodProgress[key] = { pos: 0, dur: prev.dur, at: prev.at, done: true };
+        else delete vodProgress[key];
+      } else vodProgress[key] = { pos, dur, at, ...(prev?.done ? { done: true } : null) };
       return { vodProgress };
     }),
+  setWatched: (key, done) =>
+    set((s) => {
+      const prev = s.vodProgress[key];
+      const vodProgress = { ...s.vodProgress };
+      if (done) vodProgress[key] = { pos: 0, dur: prev?.dur ?? 0, at: Date.now(), done: true };
+      else delete vodProgress[key];
+      return { vodProgress };
+    }),
+  pushHistory: (pid, entry) =>
+    set((s) => ({
+      history: { ...s.history, [pid]: [entry, ...(s.history[pid] ?? []).filter((e) => e.id !== entry.id)].slice(0, HISTORY_MAX) },
+    })),
+  removeHistory: (pid, id) => set((s) => ({ history: { ...s.history, [pid]: (s.history[pid] ?? []).filter((e) => e.id !== id) } })),
   toggleVodFavorite: (pid, fav) =>
     set((s) => {
       const list = s.vodFavorites[pid] ?? [];
@@ -158,14 +205,26 @@ function sharedDoc(s: Persisted): Doc {
 
 // Persist (debounced) whenever persisted fields change
 let timer: ReturnType<typeof setTimeout> | null = null;
+const save = () => {
+  timer = null;
+  setItem('settings', sharedDoc(useSettings.getState())).catch((e) => console.warn('Failed to save settings', e));
+};
 useSettings.subscribe((s, prev) => {
   if (!s.hydrated || !prev.hydrated) return;
   if (s.activeId !== prev.activeId) setItem('device', { activeId: s.activeId }).catch((e) => console.warn('Failed to save settings', e));
   if (timer) clearTimeout(timer);
-  timer = setTimeout(() => {
-    setItem('settings', sharedDoc(useSettings.getState())).catch((e) => console.warn('Failed to save settings', e));
-  }, 400);
+  timer = setTimeout(save, 400);
 });
+
+/** Saves pending changes now instead of after the debounce (page about to unload). */
+export function flushSettings() {
+  if (!timer) return;
+  clearTimeout(timer);
+  save();
+}
+
+// Web: a refresh or closed tab must not drop the last changes (watch progress, history)
+if (Platform.OS === 'web' && typeof window !== 'undefined') window.addEventListener('pagehide', flushSettings);
 
 // Changes made in another tab or on another device
 onRemoteChange('settings', (ops) => {

@@ -6,6 +6,10 @@ import { useSettings } from './settings';
 import { preferredLiveExt, xtreamCatchupUrl, xtreamLiveUrl } from '../services/xtream';
 import { m3uCatchupUrl } from '../services/catchup';
 import { DEFAULT_UA } from '../services/http';
+import { usePlayback } from '../player/playback';
+
+/** A new item starts from a clean slate: never let it inherit the previous item's "ended" or position. */
+const resetPlayback = (status: 'loading' | 'idle') => usePlayback.getState().set({ status, position: 0, duration: 0, error: undefined });
 
 export interface Source {
   uri: string;
@@ -49,6 +53,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const prev = cur?.kind === 'live' && cur.channelId !== channelId ? cur.channelId : get().prevChannelId;
     const pid = useLibrary.getState().playlistId;
     if (pid) useSettings.getState().pushRecent(pid, channelId);
+    if (cur?.kind !== 'live' || cur.channelId !== channelId) resetPlayback('loading');
     set({
       item: { kind: 'live', channelId },
       prevChannelId: prev,
@@ -58,14 +63,22 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     });
   },
 
-  playCatchup: (channelId, program) =>
-    set({ item: { kind: 'catchup', channelId, program }, fullscreen: true, resumeAt: undefined }),
+  playCatchup: (channelId, program) => {
+    resetPlayback('loading');
+    set({ item: { kind: 'catchup', channelId, program }, fullscreen: true, resumeAt: undefined });
+  },
 
-  playVod: (item, resumeAt) => set({ item, fullscreen: true, resumeAt }),
+  playVod: (item, resumeAt) => {
+    resetPlayback('loading');
+    set({ item, fullscreen: true, resumeAt });
+  },
 
   setFullscreen: (v) => set({ fullscreen: v }),
 
-  stop: () => set({ item: null, fullscreen: false }),
+  stop: () => {
+    resetPlayback('idle');
+    set({ item: null, fullscreen: false });
+  },
 
   retry: () => set((s) => ({ nonce: s.nonce + 1 })),
 

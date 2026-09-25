@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { usePlayer } from '../store/player';
 import { useLibrary, useAllGroups, ALL } from '../store/library';
-import { useSettings } from '../store/settings';
+import { flushSettings, useSettings } from '../store/settings';
 import { useUI } from '../store/ui';
 import { Layer, useKeys, type KeyEvt } from '../input/keys';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -130,8 +130,29 @@ export function PlayerOverlay() {
     return () => clearInterval(t);
   }, [item, saveVodProgress]);
 
+  // Web: a refresh or closed tab keeps the exact position, not the last 10 s tick
   useEffect(() => {
-    if (status === 'ended' && item.kind !== 'live') {
+    if (item.kind !== 'vod' || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const onHide = () => {
+      const { position: p, duration: d } = posRef.current;
+      if (p > 0 && d > 0) useSettings.getState().saveVodProgress(item.key, p, d);
+      flushSettings();
+    };
+    window.addEventListener('pagehide', onHide);
+    return () => window.removeEventListener('pagehide', onHide);
+  }, [item]);
+
+  // Only an item that actually played can end: never act on a stale "ended" left by the previous one
+  const played = useRef(false);
+  useEffect(() => {
+    played.current = false;
+  }, [item]);
+  useEffect(() => {
+    if (status === 'playing') played.current = true;
+  }, [status]);
+
+  useEffect(() => {
+    if (status === 'ended' && item.kind !== 'live' && played.current) {
       if (item.kind === 'vod') saveVodProgress(item.key, duration, duration);
       // Series: offer the next episode with a countdown instead of closing the player
       if (item.kind === 'vod' && item.next && autoplayNext) {
@@ -272,6 +293,8 @@ export function PlayerOverlay() {
       case 'list':
         return setListOpen(true);
       case 'guide':
+        // the channel keeps playing in the guide's preview (started from Home, the guide isn't underneath)
+        useUI.getState().setScreen('guide');
         return setFullscreen(false);
       case 'fav':
         if (ch && pid) {
@@ -601,7 +624,7 @@ function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void
   );
 }
 
-/** TiviMate-style mini channel list over the left side of the picture. */
+/** Mini channel list over the left side of the picture. */
 function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelIds: string[]; currentId?: string; onPick: (id: string) => void; onClose: () => void }) {
   const { mode, safe, player: k } = useLayout();
   const ins = useSafeAreaInsets();

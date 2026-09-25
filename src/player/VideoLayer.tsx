@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
 import { usePlayer, resolveSource } from '../store/player';
 import { useUI } from '../store/ui';
-import { useSettings } from '../store/settings';
+import { useSettings, watchId } from '../store/settings';
+import { useLibrary } from '../store/library';
 import { useVideoRect } from '../utils/hooks';
 import { VideoSurface } from './VideoSurface';
 import { usePlayback } from './playback';
@@ -40,6 +41,7 @@ export function VideoLayer() {
   useMediaSession({ source, isLive: item?.kind === 'live' });
   useLiveRecovery(item);
   useReturnToLiveEdge();
+  useLiveHistory(item);
 
   if (!item || !source) return null;
 
@@ -110,6 +112,33 @@ function useLiveRecovery(item: ReturnType<typeof usePlayer.getState>['item']) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+}
+
+const LIVE_HISTORY_MS = 10000;
+
+/** A live channel joins "Recently watched" once it has actually played for 10 s, so zapping doesn't flood it. */
+function useLiveHistory(item: ReturnType<typeof usePlayer.getState>['item']) {
+  const channelId = item?.kind === 'live' ? item.channelId : undefined;
+  useEffect(() => {
+    if (!channelId) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const record = () => {
+      const pid = useLibrary.getState().playlistId;
+      const cur = usePlayer.getState().item;
+      if (pid && cur?.kind === 'live' && cur.channelId === channelId) {
+        useSettings.getState().pushHistory(pid, { kind: 'live', id: watchId.live(channelId), channelId, at: Date.now() });
+      }
+    };
+    const check = (status: string) => {
+      if (status === 'playing' && !timer) timer = setTimeout(record, LIVE_HISTORY_MS);
+    };
+    check(usePlayback.getState().status);
+    const unsub = usePlayback.subscribe((st) => check(st.status));
+    return () => {
+      unsub();
+      if (timer) clearTimeout(timer);
+    };
+  }, [channelId]);
 }
 
 /**

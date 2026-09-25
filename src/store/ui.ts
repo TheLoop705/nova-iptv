@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Playlist, SeriesItem, VodItem } from '../types';
 
-export type Screen = 'guide' | 'movies' | 'series' | 'search' | 'settings';
+export type Screen = 'home' | 'guide' | 'movies' | 'series' | 'search' | 'settings';
 
 export interface SheetOption {
   label: string;
@@ -43,7 +43,7 @@ interface UIState {
 }
 
 export const useUI = create<UIState>((set) => ({
-  screen: 'guide',
+  screen: 'home',
   detail: null,
   editor: null,
   setDetail: (detail) => set({ detail }),

@@ -3,7 +3,7 @@ import type { Channel, Program } from '../types';
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 
 /**
- * Builds an archive URL for M3U channels following the common Kodi/TiviMate catch-up conventions.
+ * Builds an archive URL for M3U channels following the common IPTV catch-up conventions.
  * Supported: default, append, shift, flussonic(-hls/-ts), fs.
  */
 export function m3uCatchupUrl(ch: Channel, p: Program, now = Date.now()): string | null {

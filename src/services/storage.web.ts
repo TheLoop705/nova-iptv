@@ -33,11 +33,14 @@ async function idbGet<T>(key: string): Promise<T | null> {
 }
 
 async function call<T>(key: string, method: string, body?: unknown): Promise<T | null> {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
   const res = await fetch(API + encodeURIComponent(key), {
     method,
     cache: 'no-store',
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: payload === undefined ? undefined : { 'content-type': 'application/json' },
+    body: payload,
+    // lets the save on page unload finish; browsers only allow it for small bodies
+    keepalive: payload !== undefined && payload.length < 60000,
   });
   if (!res.ok) throw new Error(`Nova server: ${method} ${key} failed (HTTP ${res.status})`);
   // A static host answers with index.html here, which fails to parse

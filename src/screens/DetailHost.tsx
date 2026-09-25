@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import type { MovieInfo, SeriesInfo, SeriesItem, VodItem } from '../types';
+import type { Episode, MovieInfo, SeriesInfo, SeriesItem, VodItem } from '../types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
@@ -63,6 +63,9 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
   const [info, setInfo] = useState<MovieInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const progress = useSettings((st) => st.vodProgress[movieKey(item)]);
+  const resume = progress && progress.pos > 0 ? progress : undefined;
+  const watched = !!progress?.done;
+  const setWatched = useSettings((st) => st.setWatched);
   const [isFav, toggleFav] = useFav('movie', item);
   const [btn, setBtn] = useState(0);
 
@@ -78,8 +81,15 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
   }, [item]);
 
   const buttons = [
-    { id: 'play', label: progress ? `Resume ${formatDuration(progress.pos)}` : 'Play', icon: 'play', primary: true, run: () => playMovie(item) },
-    ...(progress ? [{ id: 'restart', label: 'Start over', icon: 'restart', primary: false, run: () => playMovie(item, true) }] : []),
+    { id: 'play', label: resume ? `Resume ${formatDuration(resume.pos)}` : watched ? 'Play again' : 'Play', icon: 'play', primary: true, run: () => playMovie(item) },
+    ...(resume ? [{ id: 'restart', label: 'Start over', icon: 'restart', primary: false, run: () => playMovie(item, true) }] : []),
+    {
+      id: 'watched',
+      label: watched ? 'Watched' : 'Mark as watched',
+      icon: watched ? 'check-circle' : 'check-circle-outline',
+      primary: false,
+      run: () => setWatched(movieKey(item), !watched),
+    },
     { id: 'fav', label: isFav ? 'Favorited' : 'Favorite', icon: isFav ? 'star' : 'star-outline', primary: false, run: toggleFav },
   ];
 
@@ -116,9 +126,19 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
             </Text>
           ) : null}
           {info?.director ? <Text style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(3) }}>Director: {info.director}</Text> : null}
-          {progress ? (
-            <View style={{ height: k(4), width: k(220), backgroundColor: colors.surface3, borderRadius: radius.pill, marginTop: k(14) }}>
-              <View style={{ height: '100%', width: `${(progress.pos / progress.dur) * 100}%`, backgroundColor: colors.accent, borderRadius: radius.pill }} />
+          {resume ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(14) }}>
+              <View style={{ height: k(4), width: k(220), backgroundColor: colors.surface3, borderRadius: radius.pill }}>
+                <View style={{ height: '100%', width: `${Math.min(100, (resume.pos / resume.dur) * 100)}%`, backgroundColor: colors.accent, borderRadius: radius.pill }} />
+              </View>
+              <Text style={{ color: colors.textDim, fontSize: k(11.5), marginLeft: k(10), fontVariant: ['tabular-nums'] }}>
+                {formatDuration(resume.pos)} of {formatDuration(resume.dur)} · {timeLeft(resume.pos, resume.dur)}
+              </Text>
+            </View>
+          ) : watched ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(14) }}>
+              <Icon name="check-circle" size={k(15)} color={colors.success} />
+              <Text style={{ color: colors.textDim, fontSize: k(11.5), marginLeft: k(6), fontWeight: '700' }}>Watched</Text>
             </View>
           ) : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(18) }}>
@@ -146,6 +166,8 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const [zone, setZone] = useState<'fav' | 'seasons' | 'episodes'>('episodes');
   const [isFav, toggleFav] = useFav('series', item);
   const progress = useSettings((st) => st.vodProgress);
+  const setWatched = useSettings((st) => st.setWatched);
+  const openSheet = useUI((st) => st.openSheet);
   const listRef = useRef<FlatList>(null);
   const epH = tv ? s(62) : 76;
 
@@ -165,6 +187,22 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
 
   const seasons = info?.seasons ?? [];
   const episodes = seasons[season]?.episodes ?? [];
+
+  const episodeSheet = (e: Episode) => {
+    const pr = progress[episodeKey(e)];
+    const resume = pr && pr.pos > 0;
+    openSheet({
+      title: `S${e.season} E${e.episode} · ${e.title}`,
+      subtitle: item.name,
+      options: [
+        { label: resume ? `Resume ${formatDuration(pr.pos)}` : 'Play', icon: 'play', onSelect: () => playEpisode(item, e) },
+        ...(resume || pr?.done ? [{ label: 'Play from the beginning', icon: 'restart', onSelect: () => playEpisode(item, e, true) }] : []),
+        pr?.done
+          ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => setWatched(episodeKey(e), false) }
+          : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => setWatched(episodeKey(e), true) },
+      ],
+    });
+  };
 
   useEffect(() => {
     listRef.current?.scrollToOffset({ offset: Math.max(0, (ep - 2) * epH), animated: true });
@@ -195,7 +233,8 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       if (e.key === 'up') return ep > 0 ? setEp(ep - 1) : setZone('fav');
       if (e.key === 'down') return setEp(Math.min(episodes.length - 1, ep + 1));
       if (e.key === 'left') return tv ? setZone('seasons') : undefined;
-      if (e.key === 'select' && episodes[ep]) return playEpisode(item, episodes[ep], !!e.long);
+      if (e.key === 'select' && episodes[ep]) return e.long ? episodeSheet(episodes[ep]) : playEpisode(item, episodes[ep]);
+      if (e.key === 'menu' && episodes[ep]) return episodeSheet(episodes[ep]);
       return undefined;
     },
     active,
@@ -284,7 +323,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     setEp(i);
                     playEpisode(item, e);
                   }}
-                  onLongPress={() => playEpisode(item, e, true)}
+                  onLongPress={() => episodeSheet(e)}
                   style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
@@ -300,14 +339,23 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                             {e.plot}
                           </Text>
                         ) : null}
-                        {pr ? (
-                          <View style={{ height: 3, backgroundColor: focused ? colors.focusDim : colors.surface3, borderRadius: radius.pill, marginTop: 5, width: '40%' }}>
-                            <View style={{ height: '100%', width: `${(pr.pos / pr.dur) * 100}%`, backgroundColor: focused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
+                        {pr && pr.pos > 0 ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                            <View style={{ height: 3, backgroundColor: focused ? colors.focusDim : colors.surface3, borderRadius: radius.pill, width: '40%' }}>
+                              <View style={{ height: '100%', width: `${Math.min(100, (pr.pos / pr.dur) * 100)}%`, backgroundColor: focused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
+                            </View>
+                            <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(10.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{timeLeft(pr.pos, pr.dur)}</Text>
                           </View>
                         ) : null}
                       </View>
+                      {pr?.done ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                          <Icon name="check-circle" size={k(14)} color={focused ? colors.focusText : colors.success} />
+                          <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11), marginLeft: 4, fontWeight: '700' }}>Watched</Text>
+                        </View>
+                      ) : null}
                       {e.duration ? <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{e.duration}</Text> : null}
-                      <Icon name="play-circle-outline" size={k(20)} color={focused ? colors.focusText : colors.textDim} style={{ marginLeft: 10 }} />
+                      <Icon name={pr && pr.pos > 0 ? 'play-circle' : 'play-circle-outline'} size={k(20)} color={focused ? colors.focusText : colors.textDim} style={{ marginLeft: 10 }} />
                     </>
                   )}
                 </Focusable>
@@ -319,6 +367,12 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       <CloseButton onPress={close} k={k} />
     </View>
   );
+}
+
+/** "12 min left" */
+function timeLeft(pos: number, dur: number) {
+  const min = Math.max(1, Math.round((dur - pos) / 60));
+  return `${min} min left`;
 }
 
 function CloseButton({ onPress, k }: { onPress: () => void; k: (n: number) => number }) {
