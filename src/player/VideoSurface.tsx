@@ -59,6 +59,9 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
   const viewRef = useRef<VideoView>(null);
   const triedFallback = useRef(false);
   const pendingSeek = useRef<number | undefined>(undefined);
+  // ExoPlayer reports "ended" for a fresh player with nothing loaded yet; only trust
+  // playToEnd once the current source has actually played.
+  const hasPlayed = useRef(false);
 
   const player = useVideoPlayer(null, (p) => {
     p.timeUpdateEventInterval = 1;
@@ -113,6 +116,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
 
   useEffect(() => {
     triedFallback.current = false;
+    hasPlayed.current = false;
     if (!source) {
       player.pause();
       player.replace(null);
@@ -155,6 +159,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
   });
 
   useEventListener(player, 'playingChange', ({ isPlaying }) => {
+    if (isPlaying) hasPlayed.current = true;
     if (usePlayback.getState().status === 'error') return;
     set({ status: isPlaying ? 'playing' : player.status === 'loading' ? 'loading' : 'paused' });
   });
@@ -163,7 +168,9 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     set({ position: currentTime, duration: player.duration || 0 });
   });
 
-  useEventListener(player, 'playToEnd', () => set({ status: 'ended' }));
+  useEventListener(player, 'playToEnd', () => {
+    if (hasPlayed.current) set({ status: 'ended' });
+  });
 
   useEventListener(player, 'mutedChange', ({ muted }) => set({ muted }));
 
