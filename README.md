@@ -4,6 +4,16 @@ A TiviMate-style IPTV player for **Android TV / Fire TV (APK)**, **iOS (iPhone &
 
 Nova is a player only: it ships no channels. Add your provider's M3U link, an M3U file, or an Xtream Codes login. A built-in demo playlist of public test streams lets you try every screen without a subscription.
 
+## Download (Fire TV / Android TV)
+
+In the **Downloader** app on your Fire TV, enter:
+
+```
+https://github.com/TheLoop705/nova-iptv/releases/latest/download/Nova-firetv.apk
+```
+
+All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/releases) page.
+
 ## Features
 
 - **TV guide (EPG grid)** in the TiviMate layout: programme details and live preview on top, a channel/timeline grid below, a now-line, group panel, and number-key channel entry.
