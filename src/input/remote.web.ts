@@ -23,6 +23,8 @@ const MAP: Record<string, KeyName> = {
   MediaTrackPrevious: 'rw',
   ' ': 'playpause',
   m: 'menu',
+  '/': 'search',
+  BrowserSearch: 'search',
   i: 'info',
   g: 'guide',
 };

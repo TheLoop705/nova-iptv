@@ -16,7 +16,9 @@ export type KeyName =
   | 'chdown'
   | 'info'
   | 'guide'
-  | 'digit';
+  | 'digit'
+  /** voice/search shortcut: hold Menu, a remote's Search/Assistant key, or "/" on the web */
+  | 'search';
 
 export interface KeyEvt {
   key: KeyName;
@@ -97,28 +99,29 @@ export const useInputMode = create<InputModeState>((set, get) => ({
 
 export const useKeyMode = () => useInputMode((s) => s.mode === 'key');
 
-// ---- raw key feed shared by platform sources: turns down/up pairs into select vs long-select ----
+// ---- raw key feed shared by platform sources: turns down/up pairs into press vs long-press ----
+// OK: short = select, held = select+long (context menu). Menu: short = menu, held = search.
 
-let selectDown = false;
-let selectLong = false;
+let heldKey: KeyName | null = null;
+let heldLong = false;
 
 export function feedKey(key: KeyName, action: 'down' | 'up', repeat: number, digit?: number): boolean {
-  if (key === 'select') {
+  if (key === 'select' || key === 'menu') {
     if (action === 'down') {
       if (repeat === 0) {
-        selectDown = true;
-        selectLong = false;
+        heldKey = key;
+        heldLong = false;
         return true;
       }
-      if (selectDown && !selectLong && repeat >= 1) {
-        selectLong = true;
-        return dispatchKey({ key: 'select', repeat: 0, long: true });
+      if (heldKey === key && !heldLong && repeat >= 1) {
+        heldLong = true;
+        return key === 'select' ? dispatchKey({ key: 'select', repeat: 0, long: true }) : dispatchKey({ key: 'search', repeat: 0 });
       }
       return true;
     }
-    const wasDown = selectDown;
-    selectDown = false;
-    if (wasDown && !selectLong) return dispatchKey({ key: 'select', repeat: 0 });
+    const wasHeld = heldKey === key;
+    heldKey = null;
+    if (wasHeld && !heldLong) return dispatchKey({ key, repeat: 0 });
     return true;
   }
   if (action === 'up') return false;

@@ -22,7 +22,8 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Catch-up**: Xtream `timeshift` and M3U `catchup` types (`default`, `append`, `shift`, `flussonic`, `fs`).
 - **Player**: channel up/down zapping, mini channel list, info overlay with progress and next programme, last-channel recall (`0`), audio/subtitle tracks, aspect modes (fit/zoom/stretch), restart the current show from catch-up.
 - **Movies & Series** (Xtream and M3U VOD): category browser, poster grid, detail pages, seasons/episodes, resume positions, favorites, recently watched.
-- **Favorites, recents, hidden groups, search** across channels, movies and series.
+- **Favorites, recents, hidden groups, search** across channels, movies and series, with forgiving matching for dictated queries ("n tv" → n-tv, "channel four" → Channel 4, "canal plus" → Canal+).
+- **Voice search**: hold **☰ Menu** on the remote (or press a remote's Search/Assistant key, or `/` on the web) to jump to Search with the keyboard open. On Fire TV, then hold the remote's **mic** button and speak: the Fire TV keyboard types what you say. Amazon reserves the mic button for Alexa, so apps can't receive it directly. On the web there's a mic button (needs HTTPS or localhost); on phones use the keyboard's mic.
 - **Remote-first navigation**: every screen works with a D-pad (Fire TV remote, Android TV remote, keyboard arrows on the web). Touch and mouse work everywhere too.
 
 ## Layout
@@ -48,7 +49,7 @@ npm run web            # terminal 2: Expo web on :8081 (uses the proxy)
 npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
 
-Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `m` = menu, PageUp/PageDown = channel up/down, digits = channel number, Space = play/pause.
+Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `m` = menu (hold for search), `/` = search, PageUp/PageDown = channel up/down, digits = channel number, Space = play/pause.
 
 ## Android TV / Fire TV APK
 

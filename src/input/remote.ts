@@ -24,6 +24,9 @@ const CODES: Record<number, KeyName> = {
   167: 'chdown',
   165: 'info',
   172: 'guide',
+  84: 'search', // KEYCODE_SEARCH (some Android TV remotes' mic/search button)
+  219: 'search', // KEYCODE_ASSIST
+  231: 'search', // KEYCODE_VOICE_ASSIST
 };
 
 export function startRemote(): () => void {

@@ -9,6 +9,8 @@ import { useLibrary } from './store/library';
 import { usePlayer } from './store/player';
 import { useUI } from './store/ui';
 import { startRemote } from './input/remote';
+import { Layer, useKeys } from './input/keys';
+import { openSearch } from './store/actions';
 import { Shell } from './screens/Shell';
 import { Onboarding } from './screens/Onboarding';
 import { PlaylistEditor } from './screens/PlaylistEditor';
@@ -43,6 +45,16 @@ function Root() {
     void useSettings.getState().hydrate();
     return startRemote();
   }, []);
+
+  // Voice/search shortcut works from every screen, including the fullscreen player
+  useKeys(
+    (e) => {
+      if (e.key !== 'search') return false;
+      openSearch();
+    },
+    hydrated && hasPlaylists && !editor,
+    Layer.dialog + 5
+  );
 
   // (Re)load the library whenever the active playlist changes
   useEffect(() => {

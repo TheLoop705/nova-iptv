@@ -32,13 +32,19 @@ class KeyCaptureLayout(context: Context) : FrameLayout(context) {
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     val focused = findFocus()
     if (focused is EditText) {
-      val vertical = event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-      // Left/right/OK stay with the text field (cursor, keyboard); up/down leave it so the
-      // remote never gets stuck in a field after the on-screen keyboard is dismissed.
-      if (!vertical) return super.dispatchKeyEvent(event)
-      if (event.action == KeyEvent.ACTION_DOWN) {
-        focused.clearFocus()
-        requestFocus()
+      when (event.keyCode) {
+        // Up/down leave the field so the remote never gets stuck after the keyboard is dismissed
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN ->
+          if (event.action == KeyEvent.ACTION_DOWN) {
+            focused.clearFocus()
+            requestFocus()
+          }
+        // The field itself needs cursor movement, OK/Enter (open keyboard / submit) and digits
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER,
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> return super.dispatchKeyEvent(event)
+        // Menu (held = voice search), media, channel and search keys still go to the app
+        else -> Unit
       }
     }
     if (RemoteKeysModule.handle(event)) return true

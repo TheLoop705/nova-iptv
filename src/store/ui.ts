@@ -28,6 +28,9 @@ interface UIState {
   setDetail: (d: Detail | null) => void;
   openEditor: (playlist?: Playlist) => void;
   closeEditor: () => void;
+  /** bumps whenever search should open with the keyboard ready (voice search shortcut) */
+  searchNonce: number;
+  focusSearch: () => void;
   /** main menu rail has key focus */
   menuFocused: boolean;
   sheet: Sheet | null;
@@ -46,6 +49,8 @@ export const useUI = create<UIState>((set) => ({
   setDetail: (detail) => set({ detail }),
   openEditor: (playlist) => set({ editor: { playlist } }),
   closeEditor: () => set({ editor: null }),
+  searchNonce: 0,
+  focusSearch: () => set((s) => ({ searchNonce: s.searchNonce + 1 })),
   menuFocused: false,
   sheet: null,
   toast: null,

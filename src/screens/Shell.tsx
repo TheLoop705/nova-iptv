@@ -8,6 +8,7 @@ import { useLibrary } from '../store/library';
 import { useActivePlaylist } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { Layer, useKeys } from '../input/keys';
+import { openSearch } from '../store/actions';
 import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
@@ -75,6 +76,7 @@ export function Shell() {
         case 'down':
           return setRailIndex((i) => Math.min(NAV.length - 1, i + 1));
         case 'select':
+          if (NAV[railIndex].id === 'search') return openSearch();
           if (NAV[railIndex].id === screen) return setMenuFocused(false);
           return setScreen(NAV[railIndex].id);
         case 'right':
