@@ -6,6 +6,7 @@ import { Layer, useKeys } from '../input/keys';
 import { Focusable } from '../components/Focusable';
 import { Icon } from '../components/Icon';
 import { usePlayback, type Fit } from './playback';
+import { formatDuration } from '../utils/format';
 import type { PlayItem } from '../types';
 
 type NextItem = NonNullable<Extract<PlayItem, { kind: 'vod' }>['next']>;
@@ -120,6 +121,95 @@ export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown }
         >
           <Icon name={ripple.side === 'left' ? 'rewind' : 'fast-forward'} size={k(28)} color="#fff" />
           <Text style={{ color: '#fff', fontWeight: '700', fontSize: k(13), marginTop: k(4) }}>{ripple.n * 10} seconds</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Seek bar
+// ---------------------------------------------------------------------------------------------
+
+interface SeekBarProps {
+  position: number;
+  duration: number;
+  /** the seek row has D-pad focus: thicker track and a knob */
+  active: boolean;
+  onSeek: (sec: number) => void;
+}
+
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+/**
+ * Standard pointer seek bar: click or tap anywhere to jump there, drag to scrub (the time
+ * follows the pointer and the seek happens on release), and on web a time preview follows the
+ * mouse. The children ignore pointer events so every coordinate is relative to the bar itself.
+ */
+export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
+  const k = useK();
+  const width = useRef(1);
+  const left = useRef(0);
+  const scrubRef = useRef<number | null>(null);
+  const [scrub, setScrub] = useState<number | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+
+  const update = (f: number | null) => {
+    scrubRef.current = f;
+    setScrub(f);
+  };
+
+  const played = scrub ?? (duration ? clamp01(position / duration) : 0);
+  const expanded = active || scrub !== null || hover !== null;
+  const tip = scrub ?? hover;
+  const web = Platform.OS === 'web';
+
+  return (
+    <View
+      style={[{ flex: 1, height: k(18), justifyContent: 'center' }, web ? ({ cursor: duration ? 'pointer' : 'default' } as object) : null]}
+      onLayout={(e) => (width.current = e.nativeEvent.layout.width || 1)}
+      onStartShouldSetResponder={() => duration > 0}
+      onMoveShouldSetResponder={() => duration > 0}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(e) => {
+        const { pageX, locationX } = e.nativeEvent;
+        left.current = pageX - locationX;
+        update(clamp01(locationX / width.current));
+      }}
+      onResponderMove={(e) => update(clamp01((e.nativeEvent.pageX - left.current) / width.current))}
+      onResponderRelease={() => {
+        if (scrubRef.current !== null) onSeek(scrubRef.current * duration);
+        update(null);
+      }}
+      onResponderTerminate={() => update(null)}
+      {...(web
+        ? {
+            onMouseMove: (e: { currentTarget: unknown; nativeEvent: { clientX: number } }) => {
+              if (!duration) return;
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setHover(clamp01((e.nativeEvent.clientX - r.left) / (r.width || 1)));
+            },
+            onMouseLeave: () => setHover(null),
+          }
+        : null)}
+    >
+      <View pointerEvents="none" style={{ height: expanded ? k(6) : k(4), backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 999, overflow: 'hidden' }}>
+        {hover !== null && scrub === null ? (
+          <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${hover * 100}%`, backgroundColor: 'rgba(255,255,255,0.18)' }} />
+        ) : null}
+        <View style={{ width: `${played * 100}%`, height: '100%', backgroundColor: colors.accent }} />
+      </View>
+      {duration && expanded ? (
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', left: played * width.current - k(7), width: k(14), height: k(14), borderRadius: k(7), backgroundColor: '#fff' }}
+        />
+      ) : null}
+      {duration && tip !== null ? (
+        <View pointerEvents="none" style={{ position: 'absolute', bottom: k(20), left: Math.min(width.current - k(56), Math.max(0, tip * width.current - k(28))), width: k(56), alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'rgba(0,0,0,0.8)', borderRadius: k(4), paddingHorizontal: k(6), paddingVertical: k(2) }}>
+            <Text style={{ color: '#fff', fontSize: k(11.5), fontWeight: '700', fontVariant: ['tabular-nums'] }}>{formatDuration(tip * duration)}</Text>
+          </View>
         </View>
       ) : null}
     </View>

@@ -25,9 +25,9 @@ import http from 'node:http';
 import https from 'node:https';
 import dns from 'node:dns';
 import net from 'node:net';
-import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
+import { createGunzip, createGzip, createInflate, createBrotliDecompress, gzipSync } from 'node:zlib';
 import os from 'node:os';
-import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { chmodSync, closeSync, createReadStream, existsSync, mkdirSync, openSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,6 +55,10 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.txt': 'text/plain; charset=utf-8',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.map': 'application/json',
@@ -239,6 +243,11 @@ async function readText(stream, limit) {
 
 // ---- proxy -----------------------------------------------------------------------------
 
+// Playlists, EPG and Xtream API responses are large, highly compressible text that IPTV panels
+// often send uncompressed. Media (video segments, images) is never recompressed.
+const COMPRESSIBLE = /json|xml|text\/|mpegurl|javascript/;
+const acceptsGzip = (req) => /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+
 const PASS_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'content-encoding', 'last-modified', 'etag', 'cache-control', 'expires'];
 
 async function handleProxy(req, res, params) {
@@ -284,24 +293,36 @@ async function handleProxy(req, res, params) {
       return res.end(`Upstream error: ${e?.message || e}`);
     }
     const isHls = text.includes('#EXT-X-');
+    const body = isHls ? rewriteHls(text, finalUrl.href, params.get('ua')) : text;
+    const gzip = body.length > 1024 && acceptsGzip(req);
     res.writeHead(status, {
       ...CORS,
       'content-type': isHls ? 'application/vnd.apple.mpegurl' : ctype || 'text/plain; charset=utf-8',
       'cache-control': 'no-cache',
       'x-final-url': finalUrl.href,
+      ...(gzip ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : null),
     });
-    return res.end(isHls ? rewriteHls(text, finalUrl.href, params.get('ua')) : text);
+    return res.end(gzip ? gzipSync(body, { level: 5 }) : body);
   }
 
   const out = { ...CORS, 'x-final-url': finalUrl.href };
   for (const h of PASS_HEADERS) if (upstream.headers[h]) out[h] = upstream.headers[h];
+  const gzip = status === 200 && req.method !== 'HEAD' && !out['content-encoding'] && !out['content-range'] && COMPRESSIBLE.test(ctype) && acceptsGzip(req);
+  if (gzip) {
+    delete out['content-length'];
+    out['content-encoding'] = 'gzip';
+    out.vary = 'accept-encoding';
+  }
   res.writeHead(status, out);
   if (req.method === 'HEAD') {
     upstream.destroy();
     return res.end();
   }
   upstream.on('error', () => res.destroy());
-  upstream.pipe(res);
+  if (!gzip) return upstream.pipe(res);
+  const z = createGzip({ level: 5 });
+  z.on('error', () => res.destroy());
+  upstream.pipe(z).pipe(res);
 }
 
 // ---- saved data ------------------------------------------------------------------------
@@ -316,7 +337,10 @@ let kvStore;
 async function kv() {
   if (!kvStore) {
     const { DatabaseSync } = await import('node:sqlite');
-    mkdirSync(dirname(DB_PATH), { recursive: true });
+    // Holds playlist credentials: owner-only. SQLite gives the -wal/-shm files the database's mode.
+    mkdirSync(dirname(DB_PATH), { recursive: true, mode: 0o700 });
+    closeSync(openSync(DB_PATH, 'a', 0o600));
+    for (const f of [DB_PATH, `${DB_PATH}-wal`, `${DB_PATH}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
     const db = new DatabaseSync(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
     kvStore = {
@@ -430,9 +454,29 @@ function serveStatic(req, res, pathname) {
     file = existsSync(idx) ? idx : join(DIST, 'index.html'); // SPA fallback
   }
   const type = MIME[extname(file)] || 'application/octet-stream';
-  const immutable = /\/_expo\/static\//.test(pathname);
-  res.writeHead(200, { 'content-type': type, 'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache' });
-  createReadStream(file).pipe(res);
+  // Bundles and assets carry a content hash in their name, so they can be cached forever
+  const immutable = /\/_expo\/static\//.test(pathname) || /\.[0-9a-f]{20,}\.\w+$/.test(file);
+  const stat = statSync(file);
+  const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const headers = { 'content-type': type, 'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache', etag, vary: 'accept-encoding' };
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  // Precompressed copies written by scripts/compress-dist.mjs (npm run build:web)
+  const accept = String(req.headers['accept-encoding'] || '');
+  let body = file;
+  for (const [enc, ext] of [['br', '.br'], ['gzip', '.gz']]) {
+    if (accept.includes(enc) && existsSync(file + ext)) {
+      headers['content-encoding'] = enc;
+      body = file + ext;
+      break;
+    }
+  }
+  headers['content-length'] = statSync(body).size;
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') return res.end();
+  createReadStream(body).pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {

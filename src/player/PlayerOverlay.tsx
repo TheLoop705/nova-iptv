@@ -15,7 +15,7 @@ import { useNow } from '../utils/hooks';
 import { Icon } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
-import { PlayerGestures, PlayerNotices } from './PlayerExtras';
+import { PlayerGestures, PlayerNotices, SeekBar } from './PlayerExtras';
 import { SPEEDS } from './playback';
 import { playNextItem } from '../services/vod';
 import type { Channel } from '../types';
@@ -404,7 +404,6 @@ export function PlayerOverlay() {
   const subtitle = item.kind === 'vod' ? item.subtitle : ch ? `${ch.num}  ${ch.name}` : '';
   const liveProgress = live && program ? (now - program.start) / (program.end - program.start) : 0;
   const seekDuration = duration || (item.kind === 'catchup' ? (item.program.end - item.program.start) / 1000 : 0);
-  const [barW, setBarW] = useState(1);
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -500,19 +499,7 @@ export function PlayerOverlay() {
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(10) }}>
                 <Text style={{ color: colors.text, fontSize: k(11.5), width: k(58) }}>{formatDuration(position)}</Text>
-                <Pressable
-                  focusable={false}
-                  onLayout={(e) => setBarW(e.nativeEvent.layout.width)}
-                  onPress={(e) => seekDuration && cmd.seekTo((e.nativeEvent.locationX / barW) * seekDuration)}
-                  style={{ flex: 1, height: k(18), justifyContent: 'center' }}
-                >
-                  <View style={{ height: row === 'seek' && visible ? k(6) : k(4), backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3 }}>
-                    <View style={{ width: `${seekDuration ? Math.min(100, (position / seekDuration) * 100) : 0}%`, height: '100%', backgroundColor: colors.accent, borderRadius: 3 }} />
-                  </View>
-                  {row === 'seek' && seekDuration ? (
-                    <View style={{ position: 'absolute', left: Math.max(0, Math.min(barW, (position / seekDuration) * barW)) - k(7), width: k(14), height: k(14), borderRadius: k(7), backgroundColor: '#fff' }} />
-                  ) : null}
-                </Pressable>
+                <SeekBar position={position} duration={seekDuration} active={row === 'seek' && visible} onSeek={(sec) => (cmd.seekTo(sec), poke())} />
                 <Text style={{ color: colors.textDim, fontSize: k(11.5), width: k(58), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
               </View>
             )}

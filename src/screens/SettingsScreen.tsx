@@ -189,7 +189,7 @@ export function SettingsScreen() {
     r.push({
       kind: 'item',
       id: 'about',
-      label: 'Nova IPTV 1.2',
+      label: 'Nova IPTV 1.3',
       icon: 'information-outline',
       value: Platform.OS === 'web' ? 'Web' : Platform.isTV ? 'Android TV' : Platform.OS === 'ios' ? 'iOS' : 'Android',
       detail: `${channelsCount} channels loaded`,
