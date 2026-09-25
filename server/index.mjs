@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Nova web server: serves the exported web app (dist/) and a streaming proxy at /api/proxy.
+// Nova web server: serves the exported web app (dist/), a streaming proxy at /api/proxy and the
+// web app's saved playlists/settings at /api/kv (SQLite).
 //
 // Browsers can't talk to most IPTV servers directly (no CORS headers, plain http on an https
 // page, providers that require a specific User-Agent), so the web build routes playlist, EPG,
@@ -17,14 +18,17 @@
 //                 internal services or cloud metadata endpoints.
 //   ALLOWED_HOSTS optional comma-separated list of upstream hosts (a host also allows its
 //                 subdomains). When set, every other host is refused.
+//   NOVA_DB       SQLite file for the web app's playlists, favourites and settings
+//                 (default ~/.nova-iptv/nova.db). Contains playlist credentials.
 
 import http from 'node:http';
 import https from 'node:https';
 import dns from 'node:dns';
 import net from 'node:net';
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, normalize, resolve } from 'node:path';
+import os from 'node:os';
+import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -39,6 +43,7 @@ const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || '')
   .map((h) => h.trim().toLowerCase())
   .filter(Boolean);
 const MAX_REDIRECTS = 5;
+const DB_PATH = resolve(process.env.NOVA_DB || join(os.homedir(), '.nova-iptv', 'nova.db'));
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -226,7 +231,7 @@ async function readText(stream, limit) {
   let size = 0;
   for await (const chunk of stream) {
     size += chunk.length;
-    if (size > limit) throw new Error('Playlist too large');
+    if (size > limit) throw new Error('Too large');
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
@@ -299,6 +304,117 @@ async function handleProxy(req, res, params) {
   upstream.pipe(res);
 }
 
+// ---- saved data ------------------------------------------------------------------------
+
+// Playlists, favourites, progress and settings (`settings`) plus uploaded M3U files (`m3u:<id>`),
+// shared by every browser that opens this server. Values are JSON. `settings` is updated with
+// field-level ops (PATCH) so two devices editing different things don't overwrite each other.
+const KV_KEY = /^(settings|m3u:[\w.-]{1,100})$/;
+const KV_MAX_BYTES = 64_000_000;
+let kvStore;
+
+async function kv() {
+  if (!kvStore) {
+    const { DatabaseSync } = await import('node:sqlite');
+    mkdirSync(dirname(DB_PATH), { recursive: true });
+    const db = new DatabaseSync(DB_PATH);
+    db.exec('PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    kvStore = {
+      get: db.prepare('SELECT value FROM kv WHERE key = ?'),
+      put: db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'),
+      del: db.prepare('DELETE FROM kv WHERE key = ?'),
+    };
+  }
+  return kvStore;
+}
+
+const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const safeKey = (k) => typeof k === 'string' && k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+
+/** Applies field-level ops from the web app (src/utils/docPatch.ts) to a stored document. */
+export function applyOps(doc, ops) {
+  if (!Array.isArray(ops)) throw new TypeError('ops must be an array');
+  const out = isObject(doc) ? doc : {};
+  for (const op of ops) {
+    const path = op?.path;
+    if (!Array.isArray(path) || path.length < 1 || path.length > 2 || !path.every(safeKey)) throw new TypeError('Invalid op path');
+    let target = out;
+    if (path.length === 2) {
+      if (!isObject(out[path[0]])) out[path[0]] = {};
+      target = out[path[0]];
+    }
+    const key = path[path.length - 1];
+    if (op.delete) delete target[key];
+    else target[key] = op.value;
+  }
+  return out;
+}
+
+/** The app is same-origin; only the dev server on localhost may call this cross-origin. */
+function kvCors(req) {
+  const origin = req.headers.origin;
+  if (!origin) return {};
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') return {};
+  } catch {
+    return {};
+  }
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'GET, PUT, PATCH, DELETE, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    vary: 'origin',
+  };
+}
+
+async function handleKv(req, res, key) {
+  const headers = { ...kvCors(req), 'content-type': 'application/json', 'cache-control': 'no-store' };
+  const send = (status, body) => {
+    res.writeHead(status, headers);
+    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  };
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, headers);
+    return res.end();
+  }
+  if (!KV_KEY.test(key)) return send(400, { error: 'Unknown key' });
+  const store = await kv();
+
+  if (req.method === 'GET') {
+    const row = store.get.get(key);
+    return send(200, `{"value":${row ? row.value : 'null'}}`); // stored text is already JSON
+  }
+  if (req.method === 'DELETE') {
+    store.del.run(key);
+    return send(200, { ok: true });
+  }
+  if (req.method !== 'PUT' && req.method !== 'PATCH') return send(405, { error: 'Method not allowed' });
+
+  let body;
+  try {
+    body = JSON.parse(await readText(req, KV_MAX_BYTES));
+  } catch (e) {
+    return send(e?.message === 'Too large' ? 413 : 400, { error: 'Body must be JSON' });
+  }
+  if (req.method === 'PUT') {
+    store.put.run(key, JSON.stringify(body), Date.now());
+    return send(200, { ok: true });
+  }
+  // PATCH: read-modify-write is atomic here — node:sqlite is synchronous and nothing awaits in between
+  if (key !== 'settings') return send(405, { error: 'PATCH is only supported for settings' });
+  const row = store.get.get(key);
+  let doc;
+  try {
+    doc = applyOps(row ? JSON.parse(row.value) : {}, body?.ops);
+  } catch (e) {
+    return send(400, { error: e.message });
+  }
+  const text = JSON.stringify(doc);
+  store.put.run(key, text, Date.now());
+  return send(200, `{"value":${text}}`);
+}
+
 function serveStatic(req, res, pathname) {
   if (!existsSync(DIST)) {
     res.writeHead(200, { 'content-type': 'text/plain' });
@@ -320,16 +436,25 @@ function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') {
+  const { pathname, searchParams } = new URL(req.url, 'http://local');
+  let kvKey = null;
+  if (pathname.startsWith('/api/kv/')) {
+    try {
+      kvKey = decodeURIComponent(pathname.slice(8));
+    } catch {
+      kvKey = ''; // malformed escape: rejected as an unknown key
+    }
+  }
+  if (req.method === 'OPTIONS' && kvKey === null) {
     res.writeHead(204, CORS);
     return res.end();
   }
-  if (!authorized(req)) {
+  if (!authorized(req) && req.method !== 'OPTIONS') {
     res.writeHead(401, { 'www-authenticate': 'Basic realm="Nova"' });
     return res.end('Authentication required');
   }
-  const { pathname, searchParams } = new URL(req.url, 'http://local');
   try {
+    if (kvKey !== null) return await handleKv(req, res, kvKey);
     if (pathname === '/api/proxy') return await handleProxy(req, res, searchParams);
     if (pathname === '/api/health') {
       res.writeHead(200, { ...CORS, 'content-type': 'application/json' });

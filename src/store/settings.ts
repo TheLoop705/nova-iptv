@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Playlist, SeriesItem, VodItem } from '../types';
-import { getItem, setItem } from '../services/storage';
+import { getItem, onRemoteChange, setItem } from '../services/storage';
+import { applyOps, type Doc } from '../utils/docPatch';
 
 export interface Prefs {
   clock24: boolean;
@@ -94,13 +95,16 @@ export const useSettings = create<SettingsState>((set, get) => ({
   hydrated: false,
 
   hydrate: async () => {
-    const saved = await getItem<Partial<Persisted>>('settings');
+    const [saved, device] = await Promise.all([getItem<Partial<Persisted>>('settings'), getItem<Pick<Persisted, 'activeId'>>('device')]);
     set({
       ...initial,
       ...(saved ?? {}),
+      // older saves kept the active playlist in the shared settings
+      activeId: device?.activeId ?? saved?.activeId,
       prefs: { ...defaultPrefs, ...(saved?.prefs ?? {}) },
       hydrated: true,
     });
+    if (!device && saved?.activeId) await setItem('device', { activeId: saved.activeId }).catch(() => {});
   },
 
   addPlaylist: (p) => set((s) => ({ playlists: [...s.playlists, p], activeId: p.id })),
@@ -142,17 +146,33 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setPrefs: (p) => set((s) => ({ prefs: { ...s.prefs, ...p } })),
 }));
 
+// Everything but the active playlist is shared: on web it syncs across browsers through the Nova
+// server, so each device keeps its own `activeId` under a separate key.
+const SHARED = (Object.keys(initial) as (keyof Persisted)[]).filter((k) => k !== 'activeId');
+
+function sharedDoc(s: Persisted): Doc {
+  const data: Doc = {};
+  for (const k of SHARED) data[k] = s[k];
+  return data;
+}
+
 // Persist (debounced) whenever persisted fields change
 let timer: ReturnType<typeof setTimeout> | null = null;
 useSettings.subscribe((s, prev) => {
   if (!s.hydrated || !prev.hydrated) return;
+  if (s.activeId !== prev.activeId) setItem('device', { activeId: s.activeId }).catch((e) => console.warn('Failed to save settings', e));
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
-    const { hydrated, ...rest } = useSettings.getState();
-    const data: Record<string, unknown> = {};
-    for (const k of Object.keys(initial) as (keyof Persisted)[]) data[k] = (rest as any)[k];
-    setItem('settings', data).catch((e) => console.warn('Failed to save settings', e));
+    setItem('settings', sharedDoc(useSettings.getState())).catch((e) => console.warn('Failed to save settings', e));
   }, 400);
+});
+
+// Changes made in another tab or on another device
+onRemoteChange('settings', (ops) => {
+  const shared = ops.filter((op) => (SHARED as string[]).includes(op.path[0]));
+  if (!shared.length) return;
+  const next = applyOps(sharedDoc(useSettings.getState()), shared) as Partial<Persisted>;
+  useSettings.setState({ ...next, prefs: { ...defaultPrefs, ...next.prefs } });
 });
 
 export const useActivePlaylist = () =>
