@@ -29,6 +29,8 @@ interface GestureProps {
   seekable: boolean;
   onTap: () => void;
   onSwipeDown: () => void;
+  /** web: the mouse moved — show the controls (and cursor) again */
+  onActivity?: () => void;
 }
 
 const DOUBLE_TAP_MS = 300;
@@ -38,7 +40,7 @@ const DOUBLE_TAP_MS = 300;
  * ∓10 s (YouTube/Netflix), double-click toggles fullscreen (web), swipe down closes the player
  * (iOS), pinch zooms to fill / back to fit.
  */
-export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown }: GestureProps) {
+export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown, onActivity }: GestureProps) {
   const k = useK();
   const width = useRef(1);
   const lastTap = useRef({ t: 0, side: '' });
@@ -46,8 +48,25 @@ export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown }
   const pinchEnd = useRef(0);
   const [ripple, setRipple] = useState<{ side: 'left' | 'right'; n: number } | null>(null);
   const rippleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const live = useRef({ seekable, onTap, onSwipeDown });
-  live.current = { seekable, onTap, onSwipeDown };
+  const live = useRef({ seekable, onTap, onSwipeDown, onActivity });
+  live.current = { seekable, onTap, onSwipeDown, onActivity };
+
+  // Web: moving the mouse brings back the cursor and controls; both hide again after the overlay's
+  // idle timeout. Browsers also send "mousemove" when content changes under a still pointer, so
+  // only real movement counts.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    let last = { x: -1, y: -1, t: 0 };
+    const onMove = (e: MouseEvent) => {
+      if (e.screenX === last.x && e.screenY === last.y) return;
+      const now = Date.now();
+      const throttled = now - last.t < 250;
+      last = { x: e.screenX, y: e.screenY, t: throttled ? last.t : now };
+      if (!throttled) live.current.onActivity?.();
+    };
+    window.addEventListener('mousemove', onMove, { passive: true });
+    return () => window.removeEventListener('mousemove', onMove);
+  }, []);
 
   const showRipple = (side: 'left' | 'right') => {
     setRipple((r) => ({ side, n: r && r.side === side ? r.n + 1 : 1 }));

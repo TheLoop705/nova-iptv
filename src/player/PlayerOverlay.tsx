@@ -408,7 +408,7 @@ export function PlayerOverlay() {
   return (
     <View style={StyleSheet.absoluteFill}>
       <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : poke())} />
-      <PlayerGestures controlsVisible={visible} seekable={!live} onTap={() => (visible ? setVisible(false) : poke())} onSwipeDown={exit} />
+      <PlayerGestures controlsVisible={visible} seekable={!live} onTap={() => (visible ? setVisible(false) : poke())} onSwipeDown={exit} onActivity={poke} />
 
       {status === 'loading' ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
