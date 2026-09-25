@@ -15,7 +15,7 @@ import { useNow } from '../utils/hooks';
 import { Icon } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
-import { PlayerGestures, PlayerNotices, SeekBar } from './PlayerExtras';
+import { PlayerGestures, PlayerNotices, SeekBar, TOUCH_MIN } from './PlayerExtras';
 import { SPEEDS } from './playback';
 import { playNextItem } from '../services/vod';
 import type { Channel } from '../types';
@@ -438,10 +438,10 @@ export function PlayerOverlay() {
       {visible && status !== 'error' && !listOpen ? (
         <>
           {/* top bar */}
-          <LinearGradient colors={['rgba(0,0,0,0.75)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: k(90) }} pointerEvents="none" />
+          <LinearGradient colors={['rgba(0,0,0,0.75)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: k(110) }} pointerEvents="none" />
           <View style={{ position: 'absolute', left: k(18), right: k(18), top: k(14), flexDirection: 'row', alignItems: 'center' }}>
             <Pressable focusable={false} onPress={exit} hitSlop={12} style={{ marginRight: k(10) }}>
-              <Icon name="arrow-left" size={k(22)} color="#fff" />
+              <Icon name="arrow-left" size={k(30)} color="#fff" />
             </Pressable>
             <View style={{ flex: 1 }} />
             <Text style={{ color: '#fff', fontSize: k(16), fontWeight: '700' }}>{formatClock(now, prefs.clock24)}</Text>
@@ -449,7 +449,7 @@ export function PlayerOverlay() {
 
           {/* center transport for touch */}
           {!tv || item.kind !== 'live' ? (
-            <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: k(40) }]}>
+            <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: k(56) }]}>
               {live ? (
                 <>
                   <RoundBtn icon="chevron-up" k={k} onPress={() => zap(-1)} />
@@ -466,7 +466,7 @@ export function PlayerOverlay() {
           ) : null}
 
           {/* bottom info panel */}
-          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(230) }} pointerEvents="none" />
+          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(300) }} pointerEvents="none" />
           <View style={{ position: 'absolute', left: k(28), right: k(28), bottom: k(22) }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: k(6) }}>
               {ch ? <Logo uri={ch.logo} name={ch.name} size={k(22)} style={{ marginRight: k(10) }} /> : null}
@@ -483,11 +483,11 @@ export function PlayerOverlay() {
               <>
                 {program ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(8) }}>
-                    <Text style={{ color: colors.textDim, fontSize: k(11), width: k(44) }}>{formatClock(program.start, prefs.clock24)}</Text>
-                    <View style={{ flex: 1, height: k(4), backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 2 }}>
+                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(56) }}>{formatClock(program.start, prefs.clock24)}</Text>
+                    <View style={{ flex: 1, height: k(6), backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 2 }}>
                       <View style={{ width: `${Math.min(100, Math.max(0, liveProgress * 100))}%`, height: '100%', backgroundColor: colors.accent, borderRadius: 2 }} />
                     </View>
-                    <Text style={{ color: colors.textDim, fontSize: k(11), width: k(44), textAlign: 'right' }}>{formatClock(program.end, prefs.clock24)}</Text>
+                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(56), textAlign: 'right' }}>{formatClock(program.end, prefs.clock24)}</Text>
                   </View>
                 ) : null}
                 {next ? (
@@ -497,14 +497,14 @@ export function PlayerOverlay() {
                 ) : null}
               </>
             ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(10) }}>
-                <Text style={{ color: colors.text, fontSize: k(11.5), width: k(58) }}>{formatDuration(position)}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(12) }}>
+                <Text style={{ color: colors.text, fontSize: k(14), width: k(72) }}>{formatDuration(position)}</Text>
                 <SeekBar position={position} duration={seekDuration} active={row === 'seek' && visible} onSeek={(sec) => (cmd.seekTo(sec), poke())} />
-                <Text style={{ color: colors.textDim, fontSize: k(11.5), width: k(58), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
+                <Text style={{ color: colors.textDim, fontSize: k(14), width: k(72), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
               </View>
             )}
 
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(8), marginTop: k(14) }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(16) }}>
               {controls.map((c, i) => (
                 <Focusable
                   key={c.id}
@@ -513,13 +513,13 @@ export function PlayerOverlay() {
                     setCtrl(i);
                     runControl(c.id);
                   }}
-                  style={{ flexDirection: 'row', alignItems: 'center', height: k(30), paddingHorizontal: k(12), borderRadius: k(15), backgroundColor: 'rgba(255,255,255,0.12)' }}
+                  style={{ flexDirection: 'row', alignItems: 'center', height: Math.max(k(40), TOUCH_MIN), paddingHorizontal: k(16), borderRadius: k(20), backgroundColor: 'rgba(255,255,255,0.12)' }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
                   {({ focused }) => (
                     <>
-                      <Icon name={c.icon} size={k(15)} color={focused ? colors.focusText : c.active ? colors.warning : '#fff'} />
-                      <Text style={{ color: focused ? colors.focusText : '#fff', fontSize: k(11.5), fontWeight: '700', marginLeft: k(6) }}>{c.label}</Text>
+                      <Icon name={c.icon} size={k(20)} color={focused ? colors.focusText : c.active ? colors.warning : '#fff'} />
+                      <Text style={{ color: focused ? colors.focusText : '#fff', fontSize: k(15), fontWeight: '700', marginLeft: k(8) }}>{c.label}</Text>
                     </>
                   )}
                 </Focusable>
@@ -589,7 +589,7 @@ function Tag({ label, color, k }: { label: string; color: string; k: (n: number)
 }
 
 function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void; k: (n: number) => number; big?: boolean }) {
-  const size = big ? k(64) : k(48);
+  const size = big ? k(84) : k(62);
   return (
     <Pressable
       focusable={false}

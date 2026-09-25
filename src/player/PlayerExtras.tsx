@@ -11,6 +11,9 @@ import type { PlayItem } from '../types';
 
 type NextItem = NonNullable<Extract<PlayItem, { kind: 'vod' }>['next']>;
 
+/** Phones and tablets: tap targets never shrink below Apple's/Google's 44 pt minimum, whatever the scale. */
+export const TOUCH_MIN = !Platform.isTV && (Platform.OS === 'ios' || Platform.OS === 'android') ? 44 : 0;
+
 const useK = () => {
   const { s, mode } = useLayout();
   return mode === 'tv' ? s : (n: number) => n * 1.1;
@@ -166,7 +169,7 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
 
   return (
     <View
-      style={[{ flex: 1, height: k(18), justifyContent: 'center' }, web ? ({ cursor: duration ? 'pointer' : 'default' } as object) : null]}
+      style={[{ flex: 1, height: Math.max(k(28), TOUCH_MIN), justifyContent: 'center' }, web ? ({ cursor: duration ? 'pointer' : 'default' } as object) : null]}
       onLayout={(e) => (width.current = e.nativeEvent.layout.width || 1)}
       onStartShouldSetResponder={() => duration > 0}
       onMoveShouldSetResponder={() => duration > 0}
@@ -193,7 +196,7 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
           }
         : null)}
     >
-      <View pointerEvents="none" style={{ height: expanded ? k(6) : k(4), backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 999, overflow: 'hidden' }}>
+      <View pointerEvents="none" style={{ height: expanded ? k(10) : k(6), backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 999, overflow: 'hidden' }}>
         {hover !== null && scrub === null ? (
           <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${hover * 100}%`, backgroundColor: 'rgba(255,255,255,0.18)' }} />
         ) : null}
@@ -202,13 +205,13 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
       {duration && expanded ? (
         <View
           pointerEvents="none"
-          style={{ position: 'absolute', left: played * width.current - k(7), width: k(14), height: k(14), borderRadius: k(7), backgroundColor: '#fff' }}
+          style={{ position: 'absolute', left: played * width.current - k(11), width: k(22), height: k(22), borderRadius: k(11), backgroundColor: '#fff' }}
         />
       ) : null}
       {duration && tip !== null ? (
-        <View pointerEvents="none" style={{ position: 'absolute', bottom: k(20), left: Math.min(width.current - k(56), Math.max(0, tip * width.current - k(28))), width: k(56), alignItems: 'center' }}>
-          <View style={{ backgroundColor: 'rgba(0,0,0,0.8)', borderRadius: k(4), paddingHorizontal: k(6), paddingVertical: k(2) }}>
-            <Text style={{ color: '#fff', fontSize: k(11.5), fontWeight: '700', fontVariant: ['tabular-nums'] }}>{formatDuration(tip * duration)}</Text>
+        <View pointerEvents="none" style={{ position: 'absolute', bottom: k(32), left: Math.min(width.current - k(88), Math.max(0, tip * width.current - k(44))), width: k(88), alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'rgba(0,0,0,0.85)', borderRadius: k(7), paddingHorizontal: k(11), paddingVertical: k(5) }}>
+            <Text style={{ color: '#fff', fontSize: k(17), fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatDuration(tip * duration)}</Text>
           </View>
         </View>
       ) : null}
@@ -260,8 +263,8 @@ export function PlayerNotices({ controlsVisible, upNext, onPlayNext, onCancelNex
       ) : null}
 
       {airplay && controlsVisible ? (
-        <View style={{ position: 'absolute', top: k(10), right: k(78), width: k(34), height: k(34), alignItems: 'center', justifyContent: 'center' }}>
-          <VideoAirPlayButton style={{ width: k(28), height: k(28) }} tint="#ffffff" activeTint={colors.accent} prioritizeVideoDevices />
+        <View style={{ position: 'absolute', top: k(14), right: k(84), width: k(42), height: k(42), alignItems: 'center', justifyContent: 'center' }}>
+          <VideoAirPlayButton style={{ width: k(34), height: k(34) }} tint="#ffffff" activeTint={colors.accent} prioritizeVideoDevices />
         </View>
       ) : null}
 
@@ -300,7 +303,7 @@ function UpNextCard({ next, raised, onPlay, onCancel }: { next: NextItem; raised
   );
 
   return (
-    <View style={{ position: 'absolute', right: k(28), bottom: raised ? k(140) : k(28), width: k(300), backgroundColor: 'rgba(12,14,19,0.94)', borderRadius: k(12), padding: k(14), borderWidth: 1, borderColor: colors.border }}>
+    <View style={{ position: 'absolute', right: k(28), bottom: raised ? k(200) : k(28), width: k(300), backgroundColor: 'rgba(12,14,19,0.94)', borderRadius: k(12), padding: k(14), borderWidth: 1, borderColor: colors.border }}>
       <Text style={{ color: colors.textDim, fontSize: k(11), fontWeight: '800', letterSpacing: 1 }}>UP NEXT · {left}s</Text>
       <Text numberOfLines={1} style={{ color: colors.text, fontSize: k(15), fontWeight: '800', marginTop: k(6) }}>
         {next.subtitle ?? next.title}

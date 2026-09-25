@@ -20,6 +20,7 @@ git -C "$repo" worktree add --detach "$tmp/src" "$ref" >/dev/null
 cd "$tmp/src"
 # APFS clone of the installed dependencies (instant, no extra disk); falls back to a clean install
 cp -Rc "$repo/node_modules" node_modules 2>/dev/null || { rm -rf node_modules; npm ci --silent; }
+npx tsc --noEmit
 npm run build:web --silent
 
 mkdir -p "$app"
