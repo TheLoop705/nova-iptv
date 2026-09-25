@@ -82,6 +82,9 @@ export const typeScale: Record<TypeName, TypeSpec> = {
   numeral: { tv: [15, 18], touch: [16, 20], weight: '700', tabular: true },
 };
 
+/** Desktop browsers show the TV layout a little denser than a TV panel does. */
+export const WEB_DENSITY = 0.86;
+
 export type LayoutMode = 'tv' | 'compact';
 /** tv = 10-foot remote UI (Fire TV / Android TV); desktop = the same layout under a mouse; tablet/phone = touch. */
 export type Device = 'tv' | 'desktop' | 'tablet' | 'phone';
@@ -96,6 +99,8 @@ export interface Layout {
   s: (n: number) => number;
   /** size for the current mode: canvas-scaled on TV layouts, points (×1.1 on tablets) on touch */
   k: (n: number) => number;
+  /** sizes for the fullscreen player overlay (TV canvas without the desktop density; ×1.1 on touch) */
+  player: (n: number) => number;
   /** title-safe inset for TV panels that overscan (0 elsewhere) */
   safe: { x: number; y: number };
   /** minimum hit target edge */
@@ -115,7 +120,7 @@ export function useLayout(): Layout {
     let scale = 1;
     if (mode === 'tv') {
       scale = Math.min(width / 960, height / 540);
-      if (Platform.OS === 'web') scale *= 0.86;
+      if (Platform.OS === 'web') scale *= WEB_DENSITY;
       scale = Math.max(0.72, Math.min(scale, 2.6));
     }
     const s = (n: number) => Math.round(n * scale * 100) / 100;
@@ -135,6 +140,8 @@ export function useLayout(): Layout {
         fontVariant: t.tabular ? ['tabular-nums'] : undefined,
       };
     };
-    return { width, height, mode, device, scale, s, k, safe, hit, type };
+    // The player keeps full TV size on desktop: its controls sit over the video, not in a dense page
+    const player = mode === 'tv' ? (n: number) => s(n) / (Platform.OS === 'web' ? WEB_DENSITY : 1) : (n: number) => n * 1.1;
+    return { width, height, mode, device, scale, s, k, player, safe, hit, type };
   }, [width, height]);
 }

@@ -14,10 +14,7 @@ type NextItem = NonNullable<Extract<PlayItem, { kind: 'vod' }>['next']>;
 /** Phones and tablets: tap targets never shrink below Apple's/Google's 44 pt minimum, whatever the scale. */
 export const TOUCH_MIN = !Platform.isTV && (Platform.OS === 'ios' || Platform.OS === 'android') ? 44 : 0;
 
-const useK = () => {
-  const { s, mode } = useLayout();
-  return mode === 'tv' ? s : (n: number) => n * 1.1;
-};
+const useK = () => useLayout().player;
 
 // ---------------------------------------------------------------------------------------------
 // Gestures: the touch/mouse layer under the player controls

@@ -1,7 +1,7 @@
 import React, { memo, useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { Channel, Program } from '../../types';
-import { cellAt, cellsInRange, type Cell } from '../../services/epg';
+import { cellAt, cellsInRange, programAt, type Cell } from '../../services/epg';
 import { Platform } from 'react-native';
 import { colors, fonts, radius } from '../../theme';
 import { formatRange } from '../../utils/format';
@@ -44,6 +44,9 @@ export const GuideRow = memo(function GuideRow(p: Props) {
   const cells = useMemo(() => cellsInRange(p.programs, windowStart, windowEnd), [p.programs, windowStart, windowEnd]);
   const focusedStart = p.focusMode === 'cell' ? cellAt(p.programs, p.focusTime).start : null;
   const chanFocused = p.focusMode === 'channel';
+  // TV/desktop: the channel column also shows what's on now, so the list reads without the grid
+  const onNow = compact ? undefined : programAt(p.programs, now);
+  const onNowProgress = onNow ? Math.min(1, Math.max(0, (now - onNow.start) / (onNow.end - onNow.start))) : 0;
 
   return (
     <View style={{ height: rowH, flexDirection: 'row' }}>
@@ -71,14 +74,26 @@ export const GuideRow = memo(function GuideRow(p: Props) {
             {p.channel.num}
           </Text>
         ) : null}
-        <Logo uri={p.channel.logo} name={p.channel.name} size={compact ? 30 : s(24)} />
+        <Logo uri={p.channel.logo} name={p.channel.name} size={compact ? 30 : s(28)} />
         {!compact ? (
-          <Text
-            numberOfLines={1}
-            style={{ flex: 1, marginLeft: s(8), color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(12.5), fontWeight: '600', fontFamily: fonts.regular }}
-          >
-            {p.channel.name}
-          </Text>
+          <View style={{ flex: 1, marginLeft: s(9), marginRight: s(4) }}>
+            <Text
+              numberOfLines={1}
+              style={{ color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(13), fontWeight: '700', fontFamily: fonts.regular }}
+            >
+              {p.channel.name}
+            </Text>
+            {onNow ? (
+              <>
+                <Text numberOfLines={1} style={{ color: chanFocused ? colors.focusDim : colors.muted, fontSize: s(11), marginTop: s(1), fontFamily: fonts.regular }}>
+                  {onNow.title || 'No information'}
+                </Text>
+                <View style={{ height: s(2), marginTop: s(3), backgroundColor: chanFocused ? colors.textDim : colors.surface3, borderRadius: radius.pill }}>
+                  <View style={{ height: '100%', width: `${Math.round(onNowProgress * 100)}%`, backgroundColor: chanFocused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
+                </View>
+              </>
+            ) : null}
+          </View>
         ) : null}
         {p.favorite && !compact ? <Icon name="star" size={s(11)} color={chanFocused ? colors.focusText : colors.star} /> : null}
         {p.channel.catchup && !compact ? (

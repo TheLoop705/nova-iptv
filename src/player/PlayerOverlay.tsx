@@ -33,9 +33,8 @@ const FIT_LABEL: Record<Fit, string> = { contain: 'Fit', cover: 'Zoom', fill: 'S
 const FIT_NEXT: Record<Fit, Fit> = { contain: 'cover', cover: 'fill', fill: 'contain' };
 
 export function PlayerOverlay() {
-  const { s, mode, safe } = useLayout();
+  const { mode, safe, player: k } = useLayout();
   const tv = mode === 'tv';
-  const k = tv ? s : (n: number) => n * 1.1;
   // phones in landscape: keep controls clear of the notch and home indicator; TVs: of the overscan
   const ins = useSafeAreaInsets();
   const edgeX = Math.max(ins.left, ins.right, safe.x);
@@ -604,8 +603,7 @@ function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void
 
 /** TiviMate-style mini channel list over the left side of the picture. */
 function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelIds: string[]; currentId?: string; onPick: (id: string) => void; onClose: () => void }) {
-  const { s, mode, safe } = useLayout();
-  const k = mode === 'tv' ? s : (n: number) => n * 1.1;
+  const { mode, safe, player: k } = useLayout();
   const ins = useSafeAreaInsets();
   const byId = useLibrary((st) => st.byId);
   const epg = useLibrary((st) => st.epg);

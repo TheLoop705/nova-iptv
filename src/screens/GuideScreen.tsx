@@ -55,7 +55,7 @@ export function GuideScreen() {
   const favSet = useMemo(() => new Set(favorites ?? []), [favorites]);
   const playingId = item && item.kind !== 'vod' ? item.channelId : undefined;
 
-  const W = (tv ? 120 : 90) * 60000;
+  const W = 90 * 60000;
   const [windowStart, setWindowStart] = useState(() => nowWindow(Date.now()));
   const windowEnd = windowStart + W;
   const [zone, setZone] = useState<Zone>('grid');
@@ -67,12 +67,15 @@ export function GuideScreen() {
 
   // ---- metrics ----
   const [boxW, setBoxW] = useState(winW - (tv ? s(64) : 0));
-  const heroH = tv ? s(206) : 0;
+  const heroH = tv ? s(118) : 0;
   const headerH = tv ? s(26) : 30;
-  const rowH = tv ? s(46) : 62;
-  const chanW = tv ? s(200) : 64;
+  const rowH = tv ? s(52) : 62;
+  // TV/desktop: categories and channels are always on screen, the grid takes what's left
+  const catW = tv ? s(168) : 0;
+  const catGap = tv ? s(8) : 0;
+  const chanW = tv ? s(236) : 64;
   const sidePad = tv ? s(10) : 0;
-  const gridW = Math.max(120, boxW - chanW - sidePad * 2 - s(2));
+  const gridW = Math.max(120, boxW - catW - catGap - chanW - sidePad * 2 - s(2));
   const m: RowMetrics = useMemo(() => ({ rowH, chanW, gridW, compact: !tv, s }), [rowH, chanW, gridW, tv, s]);
   const px = gridW / W;
 
@@ -125,19 +128,35 @@ export function GuideScreen() {
     wasFullscreen.current = fullscreen;
   }, [fullscreen, playingId, channels, ensureVisible]);
 
-  // Keep the group panel cursor on the active group
+  // Keep the category cursor on the active group (not while the remote is moving through them)
   useEffect(() => {
-    setGroupIndex(Math.max(0, groups.findIndex((g) => g.id === group?.id)));
-  }, [groups, group?.id]);
+    if (zone !== 'groups') setGroupIndex(Math.max(0, groups.findIndex((g) => g.id === group?.id)));
+  }, [groups, group?.id, zone]);
 
   const chooseGroup = useCallback(
-    (id: string) => {
+    (id: string, next: Zone | null = 'grid') => {
       setGroupId(id);
       if (pid) setLastGroup(pid, id);
-      setZone('grid');
+      if (next) setZone(next);
     },
     [pid, setLastGroup]
   );
+
+  // Moving through categories switches the channel list right away; debounced so holding the key
+  // doesn't rebuild the list for every group it passes.
+  useEffect(() => {
+    if (zone !== 'groups') return;
+    const g = groups[groupIndex];
+    if (!g || g.id === group?.id) return;
+    const t = setTimeout(() => chooseGroup(g.id, null), 160);
+    return () => clearTimeout(t);
+  }, [zone, groupIndex, groups, group?.id, chooseGroup]);
+
+  const enterChannels = () => {
+    const g = groups[groupIndex];
+    if (g && g.id !== group?.id) chooseGroup(g.id, 'channels');
+    else setZone('channels');
+  };
 
   // ---- actions ----
   const playChannel = usePlayer((st) => st.playChannel);
@@ -297,12 +316,13 @@ export function GuideScreen() {
           return setGroupIndex((i) => Math.min(n - 1, i + 8));
         case 'select':
           if (e.long) return groupSheet(groups[groupIndex]);
-          return chooseGroup(groups[groupIndex].id);
+          return enterChannels();
         case 'menu':
           return groupSheet(groups[groupIndex]);
         case 'right':
+          return enterChannels();
         case 'back':
-          return setZone('channels');
+          return false; // on to the menu
         case 'left':
           return false;
         default:
@@ -346,6 +366,9 @@ export function GuideScreen() {
         const cell = ch ? cellAt(epg[ch.id], focusTime) : undefined;
         const atNow = windowStart === nowWindow(t) && (!cell || (cell.start <= t && cell.end > t));
         if (zone === 'grid' && !atNow) return resetToNow();
+        // TV: Back walks outward one column at a time — grid → channels → categories → menu
+        if (tv && zone === 'grid') return setZone('channels');
+        if (tv && zone === 'channels') return setZone('groups');
         return false;
       }
       default:
@@ -506,18 +529,32 @@ export function GuideScreen() {
         </>
       )}
 
+      <View style={{ flex: 1, flexDirection: 'row', paddingHorizontal: sidePad }}>
+      {tv ? (
+        <CategoryColumn
+          groups={groups}
+          index={groupIndex}
+          activeId={group?.id}
+          focused={zone === 'groups'}
+          width={catW}
+          headerH={headerH}
+          s={s}
+          onPick={(id) => chooseGroup(id)}
+          onLongPick={(g) => groupSheet(g)}
+          style={{ marginRight: catGap }}
+        />
+      ) : null}
+      <View style={{ flex: 1 }}>
       {/* timeline header */}
-      <View style={{ height: headerH, flexDirection: 'row', alignItems: 'center', paddingHorizontal: sidePad }}>
-        <Pressable
-          focusable={false}
-          onPress={() => (tv ? setZone(zone === 'groups' ? 'channels' : 'groups') : undefined)}
-          style={{ width: chanW + s(2), flexDirection: 'row', alignItems: 'center', paddingLeft: tv ? s(6) : 8 }}
-        >
-          {tv ? <Icon name={zone === 'groups' ? 'menu-open' : 'menu'} size={s(14)} color={zone === 'groups' ? colors.accent : colors.textDim} style={{ marginRight: s(6) }} /> : null}
-          <Text numberOfLines={1} style={{ color: colors.text, fontSize: tv ? s(12) : 13, fontWeight: '700', flex: 1, fontFamily: fonts.regular }}>
+      <View style={{ height: headerH, flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ width: chanW + s(2), flexDirection: 'row', alignItems: 'center', paddingLeft: tv ? s(6) : 8 }}>
+          <Text numberOfLines={1} style={{ color: colors.text, fontSize: tv ? s(12.5) : 13, fontWeight: '800', flexShrink: 1, fontFamily: fonts.regular }}>
             {tv ? group?.name : formatDay(windowStart, now)}
           </Text>
-        </Pressable>
+          {tv ? (
+            <Text style={{ color: colors.muted, fontSize: s(11), fontWeight: '700', marginLeft: s(6), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>{channels.length}</Text>
+          ) : null}
+        </View>
         <View style={{ width: gridW, height: headerH, overflow: 'hidden' }}>
           {ticks.map((t) => (
             <View key={t} style={{ position: 'absolute', left: (t - windowStart) * px, top: 0, bottom: 0, justifyContent: 'center', paddingLeft: s(5), borderLeftWidth: 1, borderColor: colors.border }}>
@@ -538,7 +575,7 @@ export function GuideScreen() {
       </View>
 
       {/* grid */}
-      <View style={{ flex: 1, paddingHorizontal: sidePad }} {...pan.panHandlers}>
+      <View style={{ flex: 1 }} {...pan.panHandlers}>
         {channels.length ? (
           <FlatList
             ref={listRef}
@@ -565,10 +602,12 @@ export function GuideScreen() {
           </View>
         )}
         {nowX >= 0 && nowX <= gridW ? (
-          <View pointerEvents="none" style={{ position: 'absolute', left: sidePad + chanW + s(2) + nowX, top: -headerH, bottom: 0, width: 2, backgroundColor: colors.live }}>
+          <View pointerEvents="none" style={{ position: 'absolute', left: chanW + s(2) + nowX, top: -headerH, bottom: 0, width: 2, backgroundColor: colors.live }}>
             <View style={{ position: 'absolute', top: 0, left: -4, width: 10, height: 10, borderRadius: 5, backgroundColor: colors.live, borderWidth: 2, borderColor: colors.bg }} />
           </View>
         ) : null}
+      </View>
+      </View>
       </View>
 
       {epgStatus === 'loading' ? (
@@ -576,18 +615,6 @@ export function GuideScreen() {
           <ActivityIndicator size="small" color={colors.accent} />
           <Text style={{ color: colors.textDim, fontSize: tv ? s(11) : 12, marginLeft: 8 }}>{epgMessage ?? 'Updating guide…'}</Text>
         </View>
-      ) : null}
-
-      {tv && zone === 'groups' ? (
-        <GroupPanel
-          groups={groups}
-          index={groupIndex}
-          activeId={group?.id}
-          top={heroH}
-          s={s}
-          onPick={(id) => chooseGroup(id)}
-          onClose={() => setZone('channels')}
-        />
       ) : null}
 
       {digits ? (
@@ -614,66 +641,83 @@ function HeaderBtn({ icon, label, onPress, s, tv }: { icon?: string; label?: str
   );
 }
 
-function GroupPanel({
+/** Always-visible category list on the left of the TV guide (TiviMate-style). */
+function CategoryColumn({
   groups,
   index,
   activeId,
-  top,
+  focused,
+  width,
+  headerH,
   s,
   onPick,
-  onClose,
+  onLongPick,
+  style,
 }: {
   groups: ReturnType<typeof useAllGroups>;
+  /** remote cursor; tracks the active group when the column isn't focused */
   index: number;
   activeId?: string;
-  top: number;
+  focused: boolean;
+  width: number;
+  headerH: number;
   s: (n: number) => number;
   onPick: (id: string) => void;
-  onClose: () => void;
+  onLongPick: (g: ReturnType<typeof useAllGroups>[number]) => void;
+  style?: object;
 }) {
   const ref = useRef<FlatList>(null);
-  const itemH = s(36);
+  const listH = useRef(0);
+  const itemH = s(34);
   useEffect(() => {
-    ref.current?.scrollToOffset({ offset: Math.max(0, (index - 3) * itemH), animated: true });
+    const visible = Math.max(1, Math.floor(listH.current / itemH) || 8);
+    ref.current?.scrollToOffset({ offset: Math.max(0, (index - Math.floor(visible / 2) + 1) * itemH), animated: true });
   }, [index, itemH]);
+
   return (
-    <View style={{ position: 'absolute', left: 0, top, bottom: 0, width: s(280), backgroundColor: colors.bgElevated, borderRightWidth: 1, borderColor: colors.borderStrong, paddingTop: s(10) }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(14), marginBottom: s(6) }}>
-        <Text style={{ color: colors.muted, fontSize: s(11), fontWeight: '800', letterSpacing: 1.1, flex: 1 }}>GROUPS</Text>
-        <Pressable focusable={false} onPress={onClose}>
-          <Icon name="close" size={s(14)} color={colors.muted} />
-        </Pressable>
+    <View style={[{ width }, style]}>
+      <View style={{ height: headerH, justifyContent: 'center', paddingLeft: s(10) }}>
+        <Text style={{ color: focused ? colors.text : colors.muted, fontSize: s(11), fontWeight: '800', letterSpacing: 1.1, fontFamily: fonts.regular }}>CATEGORIES</Text>
       </View>
-      <FlatList
-        ref={ref}
-        data={groups}
-        keyExtractor={(g) => g.id}
-        getItemLayout={(_d, i) => ({ length: itemH, offset: itemH * i, index: i })}
-        renderItem={({ item: g, index: i }) => (
-          <Focusable
-            focused={i === index}
-            alwaysShowFocus
-            onPress={() => onPick(g.id)}
-            style={{ height: itemH - s(2), marginHorizontal: s(8), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(10), backgroundColor: g.id === activeId ? colors.accentSoft : 'transparent' }}
-            focusStyle={{ backgroundColor: colors.focus }}
-          >
-            {({ focused }) => (
-              <>
-                <Icon
-                  name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : 'folder-outline'}
-                  size={s(13)}
-                  color={focused ? colors.focusText : g.id === 'fav' ? colors.star : g.id === activeId ? colors.accent : colors.muted}
-                  style={{ marginRight: s(8) }}
-                />
-                <Text numberOfLines={1} style={{ flex: 1, color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: g.id === activeId ? '700' : '600' }}>
-                  {g.name}
-                </Text>
-                <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: s(11), fontVariant: ['tabular-nums'] }}>{g.channelIds.length}</Text>
-              </>
-            )}
-          </Focusable>
-        )}
-      />
+      <View style={{ flex: 1, backgroundColor: colors.bgElevated, borderRadius: s(radius.md), borderWidth: 1, borderColor: focused ? colors.borderStrong : colors.border, overflow: 'hidden' }}>
+        <FlatList
+          ref={ref}
+          data={groups}
+          keyExtractor={(g) => g.id}
+          onLayout={(e) => (listH.current = e.nativeEvent.layout.height)}
+          getItemLayout={(_d, i) => ({ length: itemH, offset: itemH * i, index: i })}
+          contentContainerStyle={{ paddingVertical: s(4) }}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item: g, index: i }) => {
+            const active = g.id === activeId;
+            return (
+              <Focusable
+                focused={focused && i === index}
+                onPress={() => onPick(g.id)}
+                onLongPress={() => onLongPick(g)}
+                style={{ height: itemH - s(2), marginHorizontal: s(4), marginVertical: s(1), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(9), backgroundColor: active ? colors.accentSoft : 'transparent' }}
+                focusStyle={{ backgroundColor: colors.focus }}
+              >
+                {({ focused: f }) => (
+                  <>
+                    {active && !f ? <View style={{ position: 'absolute', left: 0, top: s(8), bottom: s(8), width: s(3), borderRadius: 2, backgroundColor: colors.accent }} /> : null}
+                    <Icon
+                      name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : 'folder-outline'}
+                      size={s(13)}
+                      color={f ? colors.focusText : g.id === 'fav' ? colors.star : active ? colors.accent : colors.muted}
+                      style={{ marginRight: s(8) }}
+                    />
+                    <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : active ? colors.text : colors.textDim, fontSize: s(12.5), fontWeight: active || f ? '700' : '600', fontFamily: fonts.regular }}>
+                      {g.name}
+                    </Text>
+                    <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: s(11), marginLeft: s(6), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>{g.channelIds.length}</Text>
+                  </>
+                )}
+              </Focusable>
+            );
+          }}
+        />
+      </View>
     </View>
   );
 }
