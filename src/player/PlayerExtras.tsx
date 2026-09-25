@@ -1,0 +1,247 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { VideoAirPlayButton } from 'expo-video';
+import { colors, useLayout } from '../theme';
+import { Layer, useKeys } from '../input/keys';
+import { Focusable } from '../components/Focusable';
+import { Icon } from '../components/Icon';
+import { usePlayback, type Fit } from './playback';
+import type { PlayItem } from '../types';
+
+type NextItem = NonNullable<Extract<PlayItem, { kind: 'vod' }>['next']>;
+
+const useK = () => {
+  const { s, mode } = useLayout();
+  return mode === 'tv' ? s : (n: number) => n * 1.1;
+};
+
+// ---------------------------------------------------------------------------------------------
+// Gestures: the touch/mouse layer under the player controls
+// ---------------------------------------------------------------------------------------------
+
+interface GestureProps {
+  /** overlay visible (web: hides the mouse cursor while it isn't) */
+  controlsVisible: boolean;
+  seekable: boolean;
+  onTap: () => void;
+  onSwipeDown: () => void;
+}
+
+const DOUBLE_TAP_MS = 300;
+
+/**
+ * Industry-standard player gestures: tap toggles controls, double-tap left/right third seeks
+ * ∓10 s (YouTube/Netflix), double-click toggles fullscreen (web), swipe down closes the player
+ * (iOS), pinch zooms to fill / back to fit.
+ */
+export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown }: GestureProps) {
+  const k = useK();
+  const width = useRef(1);
+  const lastTap = useRef({ t: 0, side: '' });
+  const pinchStart = useRef(0);
+  const pinchEnd = useRef(0);
+  const [ripple, setRipple] = useState<{ side: 'left' | 'right'; n: number } | null>(null);
+  const rippleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const live = useRef({ seekable, onTap, onSwipeDown });
+  live.current = { seekable, onTap, onSwipeDown };
+
+  const showRipple = (side: 'left' | 'right') => {
+    setRipple((r) => ({ side, n: r && r.side === side ? r.n + 1 : 1 }));
+    if (rippleTimer.current) clearTimeout(rippleTimer.current);
+    rippleTimer.current = setTimeout(() => setRipple(null), 700);
+  };
+
+  const pan = useMemo(() => {
+    const distance = (touches: readonly { pageX: number; pageY: number }[]) =>
+      touches.length < 2 ? 0 : Math.hypot(touches[0].pageX - touches[1].pageX, touches[0].pageY - touches[1].pageY);
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        pinchStart.current = distance(e.nativeEvent.touches);
+        pinchEnd.current = pinchStart.current;
+      },
+      onPanResponderMove: (e) => {
+        const d = distance(e.nativeEvent.touches);
+        if (d) {
+          if (!pinchStart.current) pinchStart.current = d;
+          pinchEnd.current = d;
+        }
+      },
+      onPanResponderRelease: (e, g) => {
+        const { seekable: canSeek, onTap: tap, onSwipeDown: swipeDown } = live.current;
+        // pinch
+        if (pinchStart.current && pinchEnd.current) {
+          const ratio = pinchEnd.current / pinchStart.current;
+          const fit: Fit | null = ratio > 1.15 ? 'cover' : ratio < 0.87 ? 'contain' : null;
+          pinchStart.current = 0;
+          if (fit) return usePlayback.getState().set({ fit });
+        }
+        // swipe down to close
+        if (g.dy > 110 && Math.abs(g.dx) < 80) return swipeDown();
+        if (Math.abs(g.dx) > 12 || Math.abs(g.dy) > 12) return;
+        // tap / double tap
+        const now = Date.now();
+        const x = e.nativeEvent.locationX / width.current;
+        const side = x < 1 / 3 ? 'left' : x > 2 / 3 ? 'right' : 'center';
+        const isDouble = now - lastTap.current.t < DOUBLE_TAP_MS;
+        lastTap.current = { t: isDouble ? 0 : now, side };
+        if (isDouble) {
+          if (Platform.OS === 'web') return usePlayback.getState().cmd.toggleFullscreen();
+          if (canSeek && side !== 'center') {
+            usePlayback.getState().cmd.seekBy(side === 'left' ? -10 : 10);
+            return showRipple(side);
+          }
+        }
+        tap();
+      },
+    });
+  }, []);
+
+  return (
+    <View
+      style={[StyleSheet.absoluteFill, Platform.OS === 'web' && !controlsVisible ? ({ cursor: 'none' } as object) : null]}
+      onLayout={(e) => (width.current = e.nativeEvent.layout.width || 1)}
+      {...pan.panHandlers}
+    >
+      {ripple ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            width: '34%',
+            [ripple.side]: 0,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(255,255,255,0.08)',
+          }}
+        >
+          <Icon name={ripple.side === 'left' ? 'rewind' : 'fast-forward'} size={k(28)} color="#fff" />
+          <Text style={{ color: '#fff', fontWeight: '700', fontSize: k(13), marginTop: k(4) }}>{ripple.n * 10} seconds</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notices: reconnecting, tap to unmute, AirPlay, up next
+// ---------------------------------------------------------------------------------------------
+
+interface NoticeProps {
+  controlsVisible: boolean;
+  upNext: NextItem | null;
+  onPlayNext: () => void;
+  onCancelNext: () => void;
+}
+
+export function PlayerNotices({ controlsVisible, upNext, onPlayNext, onCancelNext }: NoticeProps) {
+  const k = useK();
+  const reconnect = usePlayback((s) => s.reconnect);
+  const muted = usePlayback((s) => s.muted);
+  const engine = usePlayback((s) => s.engine);
+  const status = usePlayback((s) => s.status);
+  const airplay = usePlayback((s) => s.caps.airplay);
+
+  return (
+    <>
+      {reconnect > 0 ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+          <View style={{ marginTop: k(90), backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 999, paddingHorizontal: k(14), paddingVertical: k(6) }}>
+            <Text style={{ color: '#fff', fontSize: k(12), fontWeight: '600' }}>Reconnecting… ({reconnect}/3)</Text>
+          </View>
+        </View>
+      ) : null}
+
+      {engine === 'web' && muted && status === 'playing' ? (
+        <View pointerEvents="box-none" style={{ position: 'absolute', top: k(56), left: 0, right: 0, alignItems: 'center' }}>
+          <Pressable
+            focusable={false}
+            onPress={() => usePlayback.getState().cmd.setMuted(false)}
+            accessibilityLabel="Unmute"
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.focus, borderRadius: 999, paddingHorizontal: k(14), paddingVertical: k(7) }}
+          >
+            <Icon name="volume-off" size={k(16)} color={colors.focusText} />
+            <Text style={{ color: colors.focusText, fontWeight: '700', fontSize: k(12.5), marginLeft: k(6) }}>Tap to unmute</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {airplay && controlsVisible ? (
+        <View style={{ position: 'absolute', top: k(10), right: k(78), width: k(34), height: k(34), alignItems: 'center', justifyContent: 'center' }}>
+          <VideoAirPlayButton style={{ width: k(28), height: k(28) }} tint="#ffffff" activeTint={colors.accent} prioritizeVideoDevices />
+        </View>
+      ) : null}
+
+      {upNext ? <UpNextCard next={upNext} raised={controlsVisible} onPlay={onPlayNext} onCancel={onCancelNext} /> : null}
+    </>
+  );
+}
+
+const UP_NEXT_SECONDS = 10;
+
+/** Netflix-style "Up next" with a countdown; OK plays now, Back cancels. */
+function UpNextCard({ next, raised, onPlay, onCancel }: { next: NextItem; raised: boolean; onPlay: () => void; onCancel: () => void }) {
+  const k = useK();
+  const [left, setLeft] = useState(UP_NEXT_SECONDS);
+  const [btn, setBtn] = useState(0);
+
+  useEffect(() => {
+    if (left <= 0) {
+      onPlay();
+      return;
+    }
+    const t = setTimeout(() => setLeft((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [left, onPlay]);
+
+  useKeys(
+    (e) => {
+      if (e.key === 'left') return setBtn(0);
+      if (e.key === 'right') return setBtn(1);
+      if (e.key === 'select') return btn === 0 ? onPlay() : onCancel();
+      if (e.key === 'back') return onCancel();
+      return;
+    },
+    true,
+    Layer.player + 2
+  );
+
+  return (
+    <View style={{ position: 'absolute', right: k(28), bottom: raised ? k(140) : k(28), width: k(300), backgroundColor: 'rgba(12,14,19,0.94)', borderRadius: k(12), padding: k(14), borderWidth: 1, borderColor: colors.border }}>
+      <Text style={{ color: colors.textDim, fontSize: k(11), fontWeight: '800', letterSpacing: 1 }}>UP NEXT · {left}s</Text>
+      <Text numberOfLines={1} style={{ color: colors.text, fontSize: k(15), fontWeight: '800', marginTop: k(6) }}>
+        {next.subtitle ?? next.title}
+      </Text>
+      <Text numberOfLines={1} style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(2) }}>
+        {next.title}
+      </Text>
+      <View style={{ height: k(3), backgroundColor: colors.surface3, borderRadius: 2, marginTop: k(10) }}>
+        <View style={{ height: '100%', width: `${((UP_NEXT_SECONDS - left) / UP_NEXT_SECONDS) * 100}%`, backgroundColor: colors.accent, borderRadius: 2 }} />
+      </View>
+      <View style={{ flexDirection: 'row', gap: k(8), marginTop: k(12) }}>
+        {[
+          { label: 'Play now', icon: 'play', run: onPlay },
+          { label: 'Cancel', icon: 'close', run: onCancel },
+        ].map((b, i) => (
+          <Focusable
+            key={b.label}
+            focused={btn === i}
+            onPress={b.run}
+            style={{ flexDirection: 'row', alignItems: 'center', height: k(32), paddingHorizontal: k(12), borderRadius: k(16), backgroundColor: 'rgba(255,255,255,0.12)' }}
+            focusStyle={{ backgroundColor: colors.focus }}
+          >
+            {({ focused }) => (
+              <>
+                <Icon name={b.icon} size={k(15)} color={focused ? colors.focusText : '#fff'} />
+                <Text style={{ color: focused ? colors.focusText : '#fff', fontSize: k(12), fontWeight: '700', marginLeft: k(6) }}>{b.label}</Text>
+              </>
+            )}
+          </Focusable>
+        ))}
+      </View>
+    </View>
+  );
+}

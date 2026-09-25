@@ -15,6 +15,8 @@ export interface Prefs {
   previewInGuide: boolean;
   /** iPhone/iPad engine: auto = AVPlayer for HLS/MP4, VLC for MKV/AVI/TS and AVPlayer failures */
   iosPlayer: 'auto' | 'vlc' | 'native';
+  /** series: start the next episode after a countdown */
+  autoplayNext: boolean;
 }
 
 export const defaultPrefs: Prefs = {
@@ -28,6 +30,7 @@ export const defaultPrefs: Prefs = {
   showChannelNumbers: true,
   previewInGuide: true,
   iosPlayer: 'auto',
+  autoplayNext: true,
 };
 
 export type VodFav = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };

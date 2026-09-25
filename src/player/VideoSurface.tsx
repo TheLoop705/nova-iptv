@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Platform, type StyleProp, type ViewStyle } from 'react-native';
-import { useVideoPlayer, VideoView, type VideoSource } from 'expo-video';
+import { isPictureInPictureSupported, useVideoPlayer, VideoView, type VideoSource } from 'expo-video';
 import { useEventListener } from 'expo';
-import type { Source } from '../store/player';
+import { usePlayer, type Source } from '../store/player';
 import { useSettings } from '../store/settings';
+import { imageUrl } from '../services/http';
 import { guessContentType, preferVlc, usePlayback } from './playback';
 import { VlcSurface } from './VlcSurface';
 import { VlcPlayerView } from '../../modules/vlc-player';
@@ -15,12 +16,14 @@ interface Props {
   style?: StyleProp<ViewStyle>;
 }
 
-function toVideoSource(uri: string, ua: string): VideoSource {
+function toVideoSource(uri: string, src: Source): VideoSource {
   const type = guessContentType(uri);
   return {
     uri,
-    headers: { 'User-Agent': ua },
+    headers: { 'User-Agent': src.userAgent },
     contentType: type === 'auto' ? 'auto' : type,
+    // Feeds the iOS lock screen / Control Center and the Android media session (Alexa, Bluetooth)
+    metadata: { title: src.title, artist: src.subtitle, artwork: imageUrl(src.artwork) },
   };
 }
 
@@ -33,7 +36,8 @@ export function VideoSurface(props: Props) {
   const iosPlayer = useSettings((s) => s.prefs.iosPlayer ?? 'auto');
   const [failedOnNative, setFailedOnNative] = useState<string | null>(null);
   const vlc = Platform.OS === 'ios' && !!VlcPlayerView;
-  const key = props.source ? `${props.source.uri}#${props.nonce}` : '';
+  // keyed by URL only, so reconnects of a stream AVPlayer can't handle stay on VLC
+  const key = props.source?.uri ?? '';
 
   let engine: 'native' | 'vlc' = 'native';
   if (vlc && props.source) {
@@ -45,10 +49,14 @@ export function VideoSurface(props: Props) {
   return <NativeSurface {...props} onFail={vlc && iosPlayer === 'auto' ? () => setFailedOnNative(key) : undefined} />;
 }
 
+const PIP = !Platform.isTV && isPictureInPictureSupported();
+
 /** expo-video: ExoPlayer on Android/Fire TV, AVPlayer on iOS. */
 function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onFail?: () => void }) {
   const fit = usePlayback((s) => s.fit);
   const set = usePlayback((s) => s.set);
+  const fullscreen = usePlayer((s) => s.fullscreen);
+  const viewRef = useRef<VideoView>(null);
   const triedFallback = useRef(false);
   const pendingSeek = useRef<number | undefined>(undefined);
 
@@ -56,10 +64,18 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     p.timeUpdateEventInterval = 1;
     p.keepScreenOnWhilePlaying = true;
     p.bufferOptions = { preferredForwardBufferDuration: 20, minBufferForPlayback: 1.5 };
+    // Lock screen / Control Center controls on iOS; media session + notification on Android
+    p.showNowPlayingNotification = true;
   });
 
   useEffect(() => {
     set({
+      engine: 'native',
+      caps: { speed: true, mute: true, quality: false, pip: PIP, airplay: Platform.OS === 'ios', fullscreen: false },
+      rate: 1,
+      muted: false,
+      qualities: [],
+      qualityIndex: -1,
       cmd: {
         play: () => player.play(),
         pause: () => player.pause(),
@@ -76,6 +92,21 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
           player.subtitleTrack = i < 0 ? null : (player.availableSubtitleTracks[i] ?? null);
           set({ subtitleIndex: i });
         },
+        setRate: (rate) => {
+          player.playbackRate = rate;
+          set({ rate });
+        },
+        setMuted: (muted) => {
+          player.muted = muted;
+          set({ muted });
+        },
+        setQuality: () => {},
+        togglePip: () => {
+          if (!PIP) return;
+          if (usePlayback.getState().pip) void viewRef.current?.stopPictureInPicture();
+          else void viewRef.current?.startPictureInPicture();
+        },
+        toggleFullscreen: () => {},
       },
     });
   }, [player, set]);
@@ -90,8 +121,10 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     }
     pendingSeek.current = resumeAt;
     set({ status: 'loading', error: undefined, position: 0, duration: 0, audioTracks: [], subtitleTracks: [], audioIndex: -1, subtitleIndex: -1 });
-    player.replace(toVideoSource(source.uri, source.userAgent), true);
+    player.playbackRate = 1;
+    player.replace(toVideoSource(source.uri, source), true);
     player.play();
+    set({ rate: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source?.uri, source?.userAgent, nonce, player]);
 
@@ -105,7 +138,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
       }
       if (source?.fallback && !triedFallback.current) {
         triedFallback.current = true;
-        player.replace(toVideoSource(source.fallback, source.userAgent), true);
+        player.replace(toVideoSource(source.fallback, source), true);
         player.play();
         return;
       }
@@ -132,6 +165,8 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
 
   useEventListener(player, 'playToEnd', () => set({ status: 'ended' }));
 
+  useEventListener(player, 'mutedChange', ({ muted }) => set({ muted }));
+
   useEventListener(player, 'sourceLoad', ({ duration, availableAudioTracks, availableSubtitleTracks }) => {
     set({
       duration: duration || 0,
@@ -142,5 +177,18 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     });
   });
 
-  return <VideoView player={player} nativeControls={false} contentFit={fit} style={style} allowsPictureInPicture={false} />;
+  return (
+    <VideoView
+      ref={viewRef}
+      player={player}
+      nativeControls={false}
+      contentFit={fit}
+      style={style}
+      allowsPictureInPicture={PIP}
+      // Leaving the app while watching fullscreen continues in Picture in Picture (iOS, Android 12+)
+      startsPictureInPictureAutomatically={PIP && fullscreen}
+      onPictureInPictureStart={() => set({ pip: true })}
+      onPictureInPictureStop={() => set({ pip: false })}
+    />
+  );
 }

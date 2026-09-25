@@ -26,6 +26,18 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Voice search**: hold **☰ Menu** on the remote (or press a remote's Search/Assistant key, or `/` on the web) to jump to Search with the keyboard open. On Fire TV, then hold the remote's **mic** button and speak: the Fire TV keyboard types what you say. Amazon reserves the mic button for Alexa, so apps can't receive it directly. On the web there's a mic button (needs HTTPS or localhost); on phones use the keyboard's mic.
 - **Remote-first navigation**: every screen works with a D-pad (Fire TV remote, Android TV remote, keyboard arrows on the web). Touch and mouse work everywhere too.
 
+## Player
+
+Each platform follows its own conventions:
+
+| | Fire TV / Android TV | iPhone / iPad | Web |
+| --- | --- | --- | --- |
+| Engine | ExoPlayer (Media3) | AVPlayer for HLS/MP4, VLC for MKV/AVI/TS + automatic fallback | hls.js / mpegts.js / `<video>` |
+| System integration | Media session → Alexa voice transport controls ("Alexa, pause / rewind"), Bluetooth/HDMI-CEC media keys | Lock screen & Control Center (Now Playing), AirPlay, Picture in Picture (auto when leaving the app) | Media Session API (OS media overlay, hardware media keys; next/previous = channel zapping), Picture in Picture, true browser fullscreen |
+| Controls | D-pad, remote play/pause/FF/RW (10 s, hold to accelerate), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, YouTube keyboard shortcuts, idle cursor hides |
+
+Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, "Up next" episode countdown, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
+
 ## Layout
 
 | Path | What it is |
@@ -49,7 +61,7 @@ npm run web            # terminal 2: Expo web on :8081 (uses the proxy)
 npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
 
-Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `m` = menu (hold for search), `/` = search, PageUp/PageDown = channel up/down, digits = channel number, Space = play/pause.
+Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` = search, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture.
 
 ## Android TV / Fire TV APK
 

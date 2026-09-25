@@ -18,7 +18,14 @@ export type KeyName =
   | 'guide'
   | 'digit'
   /** voice/search shortcut: hold Menu, a remote's Search/Assistant key, or "/" on the web */
-  | 'search';
+  | 'search'
+  // player shortcuts (web keyboard, remotes with dedicated keys)
+  | 'mute'
+  | 'fullscreen'
+  | 'captions'
+  | 'faster'
+  | 'slower'
+  | 'pip';
 
 export interface KeyEvt {
   key: KeyName;

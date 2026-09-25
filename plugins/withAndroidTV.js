@@ -18,8 +18,16 @@ module.exports = function withAndroidTV(config, { banner = './assets/tv/banner.p
     ensureFeature(manifest, 'android.hardware.touchscreen');
     ensureFeature(manifest, 'android.hardware.faketouch');
 
+    // Alexa voice transport controls ("Alexa, pause / rewind / fast-forward") through the media session
+    manifest['uses-permission'] = manifest['uses-permission'] || [];
+    const VOICE = 'com.amazon.permission.media.session.voicecommandcontrol';
+    if (!manifest['uses-permission'].some((p) => p.$['android:name'] === VOICE)) {
+      manifest['uses-permission'].push({ $: { 'android:name': VOICE } });
+    }
+
     const app = AndroidConfig.Manifest.getMainApplicationOrThrow(cfg.modResults);
     app.$['android:banner'] = '@drawable/tv_banner';
+    AndroidConfig.Manifest.addMetaDataItemToMainApplication(app, 'com.amazon.voice.supports_background_media_session', 'true');
 
     const activity = AndroidConfig.Manifest.getMainActivityOrThrow(cfg.modResults);
     const main = (activity['intent-filter'] || []).find((f) =>

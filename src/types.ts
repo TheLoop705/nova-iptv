@@ -130,4 +130,6 @@ export type PlayItem =
       url: string;
       poster?: string;
       userAgent?: string;
+      /** next episode of a series, offered by the "Up next" countdown */
+      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>;
     };

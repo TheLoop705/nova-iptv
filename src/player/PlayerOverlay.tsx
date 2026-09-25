@@ -15,6 +15,9 @@ import { useNow } from '../utils/hooks';
 import { Icon } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
+import { PlayerGestures, PlayerNotices } from './PlayerExtras';
+import { SPEEDS } from './playback';
+import { playNextItem } from '../services/vod';
 import type { Channel } from '../types';
 
 interface Control {
@@ -61,6 +64,13 @@ export function PlayerOverlay() {
   const subtitleTracks = usePlayback((st) => st.subtitleTracks);
   const fit = usePlayback((st) => st.fit);
   const cmd = usePlayback((st) => st.cmd);
+  const caps = usePlayback((st) => st.caps);
+  const rate = usePlayback((st) => st.rate);
+  const muted = usePlayback((st) => st.muted);
+  const qualities = usePlayback((st) => st.qualities);
+  const qualityIndex = usePlayback((st) => st.qualityIndex);
+  const autoQuality = usePlayback((st) => st.autoQuality);
+  const autoplayNext = useSettings((st) => st.prefs.autoplayNext ?? true);
 
   const now = useNow(5000);
   const live = item.kind === 'live';
@@ -75,6 +85,7 @@ export function PlayerOverlay() {
   const [ctrl, setCtrl] = useState(0);
   const [listOpen, setListOpen] = useState(false);
   const [digits, setDigits] = useState('');
+  const [upNext, setUpNext] = useState<NonNullable<Extract<typeof item, { kind: 'vod' }>['next']> | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const digitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -89,6 +100,7 @@ export function PlayerOverlay() {
 
   useEffect(() => {
     poke();
+    setUpNext(null);
     setRow(live ? 'controls' : 'seek');
     return () => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -116,9 +128,13 @@ export function PlayerOverlay() {
   useEffect(() => {
     if (status === 'ended' && item.kind !== 'live') {
       if (item.kind === 'vod') saveVodProgress(item.key, duration, duration);
-      stop();
+      // Series: offer the next episode with a countdown instead of closing the player
+      if (item.kind === 'vod' && item.next && autoplayNext) {
+        setVisible(false);
+        setUpNext(item.next);
+      } else stop();
     }
-  }, [status, item, duration, saveVodProgress, stop]);
+  }, [status, item, duration, saveVodProgress, stop, autoplayNext]);
 
   const exit = useCallback(() => {
     if (item.kind === 'vod') {
@@ -162,8 +178,16 @@ export function PlayerOverlay() {
     if (audioTracks.length > 1) list.push({ id: 'audio', icon: 'volume-high', label: 'Audio' });
     if (subtitleTracks.length) list.push({ id: 'subs', icon: 'subtitles-outline', label: 'Subtitles' });
     list.push({ id: 'fit', icon: 'aspect-ratio', label: FIT_LABEL[fit] });
+    if (!live && caps.speed) list.push({ id: 'speed', icon: 'speedometer', label: `${rate}x`, active: rate !== 1 });
+    if (caps.quality) {
+      const q = qualityIndex >= 0 ? qualities[qualityIndex]?.label : autoQuality ? `Auto · ${autoQuality}` : 'Auto';
+      list.push({ id: 'quality', icon: 'high-definition-box', label: q ?? 'Auto' });
+    }
+    if (caps.mute && caps.fullscreen) list.push({ id: 'mute', icon: muted ? 'volume-off' : 'volume-high', label: muted ? 'Unmute' : 'Mute', active: muted });
+    if (caps.pip) list.push({ id: 'pip', icon: 'picture-in-picture-bottom-right', label: 'PiP' });
+    if (caps.fullscreen) list.push({ id: 'fullscreen', icon: 'fullscreen', label: 'Fullscreen' });
     return list;
-  }, [live, isFav, ch, program, now, status, item.kind, audioTracks.length, subtitleTracks.length, fit]);
+  }, [live, isFav, ch, program, now, status, item.kind, audioTracks.length, subtitleTracks.length, fit, caps, rate, qualities, qualityIndex, autoQuality, muted]);
 
   useEffect(() => {
     if (ctrl >= controls.length) setCtrl(controls.length - 1);
@@ -194,6 +218,32 @@ export function PlayerOverlay() {
         onSelect: () => usePlayback.getState().set({ fit: f }),
       })),
     });
+  const speedSheet = () =>
+    openSheet({
+      title: 'Playback speed',
+      options: SPEEDS.map((r) => ({ label: r === 1 ? 'Normal' : `${r}x`, selected: r === usePlayback.getState().rate, onSelect: () => cmd.setRate(r) })),
+    });
+  const qualitySheet = () =>
+    openSheet({
+      title: 'Quality',
+      options: [
+        { label: 'Auto', detail: 'Adapts to your connection', selected: usePlayback.getState().qualityIndex < 0, onSelect: () => cmd.setQuality(-1) },
+        ...qualities.map((q, i) => ({ label: q.label, selected: i === usePlayback.getState().qualityIndex, onSelect: () => cmd.setQuality(i) })),
+      ],
+    });
+  const stepRate = (dir: 1 | -1) => {
+    const i = SPEEDS.indexOf(usePlayback.getState().rate);
+    const r = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? SPEEDS.indexOf(1) : i) + dir))];
+    cmd.setRate(r);
+    showToast(r === 1 ? 'Normal speed' : `${r}x speed`);
+  };
+  const cycleCaptions = () => {
+    if (!subtitleTracks.length) return showToast('No subtitles in this stream');
+    const cur = usePlayback.getState().subtitleIndex;
+    const nextIdx = cur + 1 >= subtitleTracks.length ? -1 : cur + 1;
+    cmd.setSubtitle(nextIdx);
+    showToast(nextIdx < 0 ? 'Subtitles off' : `Subtitles: ${subtitleTracks[nextIdx].label}`);
+  };
   const optionsSheet = () =>
     openSheet({
       title: ch ? ch.name : item.kind === 'vod' ? item.title : 'Options',
@@ -201,6 +251,9 @@ export function PlayerOverlay() {
         ...(audioTracks.length > 1 ? [{ label: 'Audio track', icon: 'volume-high', onSelect: audioSheet }] : []),
         ...(subtitleTracks.length ? [{ label: 'Subtitles', icon: 'subtitles-outline', onSelect: subsSheet }] : []),
         { label: 'Aspect ratio', icon: 'aspect-ratio', detail: FIT_LABEL[fit], onSelect: fitSheet },
+        ...(!live && caps.speed ? [{ label: 'Playback speed', icon: 'speedometer', detail: rate === 1 ? 'Normal' : `${rate}x`, onSelect: speedSheet }] : []),
+        ...(caps.quality ? [{ label: 'Quality', icon: 'high-definition-box', onSelect: qualitySheet }] : []),
+        ...(caps.pip ? [{ label: 'Picture in Picture', icon: 'picture-in-picture-bottom-right', onSelect: () => cmd.togglePip() }] : []),
         ...(ch && pid
           ? [{ label: isFav ? 'Remove from favorites' : 'Add to favorites', icon: 'star-outline', onSelect: () => toggleFavorite(pid, ch.id) }]
           : []),
@@ -237,6 +290,16 @@ export function PlayerOverlay() {
         return subsSheet();
       case 'fit':
         return usePlayback.getState().set({ fit: FIT_NEXT[fit] });
+      case 'speed':
+        return speedSheet();
+      case 'quality':
+        return qualitySheet();
+      case 'mute':
+        return cmd.setMuted(!muted);
+      case 'pip':
+        return cmd.togglePip();
+      case 'fullscreen':
+        return cmd.toggleFullscreen();
     }
   };
 
@@ -267,6 +330,12 @@ export function PlayerOverlay() {
       if (live && (e.key === 'down' || e.key === 'chdown')) return zap(1);
       return;
     }
+    // standard player shortcuts (web keyboard / remotes with dedicated keys)
+    if (e.key === 'mute') return cmd.setMuted(!usePlayback.getState().muted);
+    if (e.key === 'fullscreen') return cmd.toggleFullscreen();
+    if (e.key === 'pip') return cmd.togglePip();
+    if (e.key === 'captions') return cycleCaptions();
+    if (e.key === 'faster' || e.key === 'slower') return live ? undefined : stepRate(e.key === 'faster' ? 1 : -1);
     if (e.key === 'menu' || (e.key === 'select' && e.long)) return optionsSheet();
     if (e.key === 'playpause') return togglePlay();
     if (e.key === 'info') return visible ? setVisible(false) : poke();
@@ -309,10 +378,9 @@ export function PlayerOverlay() {
         cmd.seekBy(e.key === 'left' ? -step : step);
         return poke();
       case 'rw':
-        cmd.seekBy(-30);
-        return poke();
       case 'ff':
-        cmd.seekBy(30);
+        // 10 s per press like Fire TV / Alexa / YouTube (J, L); holding accelerates
+        cmd.seekBy(e.key === 'rw' ? -step : step);
         return poke();
       case 'up':
         setRow('seek');
@@ -341,6 +409,7 @@ export function PlayerOverlay() {
   return (
     <View style={StyleSheet.absoluteFill}>
       <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : poke())} />
+      <PlayerGestures controlsVisible={visible} seekable={!live} onTap={() => (visible ? setVisible(false) : poke())} onSwipeDown={exit} />
 
       {status === 'loading' ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
@@ -484,6 +553,20 @@ export function PlayerOverlay() {
           <Text style={{ color: '#fff', fontSize: k(30), fontWeight: '800', letterSpacing: 2 }}>{digits}</Text>
         </View>
       ) : null}
+
+      <PlayerNotices
+        controlsVisible={visible && !listOpen}
+        upNext={upNext}
+        onPlayNext={() => {
+          const n = upNext;
+          setUpNext(null);
+          if (n) playNextItem(n);
+        }}
+        onCancelNext={() => {
+          setUpNext(null);
+          stop();
+        }}
+      />
 
       {listOpen && live ? (
         <ChannelListPanel

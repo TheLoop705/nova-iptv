@@ -36,7 +36,25 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
 
   useEffect(() => {
     set({
+      engine: 'vlc',
+      caps: { speed: true, mute: true, quality: false, pip: false, airplay: false, fullscreen: false },
+      rate: 1,
+      muted: false,
+      qualities: [],
+      qualityIndex: -1,
+      pip: false,
       cmd: {
+        setRate: (rate) => {
+          void ref.current?.setRate(rate);
+          set({ rate });
+        },
+        setMuted: (muted) => {
+          void ref.current?.setMuted(muted);
+          set({ muted });
+        },
+        setQuality: () => {},
+        togglePip: () => {},
+        toggleFullscreen: () => {},
         play: () => void ref.current?.play(),
         pause: () => void ref.current?.pause(),
         seekTo: (sec) => void ref.current?.seekTo(sec),
@@ -94,7 +112,7 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
       ref={ref}
       style={style}
       fit={fit}
-      source={{ uri, userAgent: source.userAgent, isLive: source.isLive, nonce: nonce * 1000 + reload }}
+      source={{ uri, userAgent: source.userAgent, isLive: source.isLive, nonce: nonce * 1000 + reload, title: source.title, subtitle: source.subtitle }}
       onStatus={(e) => onStatus(e.nativeEvent.status, e.nativeEvent.error)}
       onProgress={(e) => set({ position: e.nativeEvent.position, duration: e.nativeEvent.duration })}
       onTracks={(e) => {

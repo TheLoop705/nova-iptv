@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { create } from 'zustand';
 import type { Channel, PlayItem, Program } from '../types';
-import { useLibrary } from './library';
+import { ALL, FAV, RECENT, useLibrary } from './library';
 import { useSettings } from './settings';
 import { preferredLiveExt, xtreamCatchupUrl, xtreamLiveUrl } from '../services/xtream';
 import { m3uCatchupUrl } from '../services/catchup';
@@ -13,6 +13,10 @@ export interface Source {
   isLive: boolean;
   /** alternate URL to try if the first fails (e.g. .ts <-> .m3u8) */
   fallback?: string;
+  /** Now Playing / lock screen / Alexa / browser media session metadata */
+  title?: string;
+  subtitle?: string;
+  artwork?: string;
 }
 
 interface PlayerState {
@@ -89,30 +93,54 @@ export function resolveSource(item: PlayItem): Source | null {
   const playlist = settings.playlists.find((p) => p.id === lib.playlistId);
   const baseUA = playlist?.userAgent || settings.prefs.userAgent || DEFAULT_UA;
 
-  if (item.kind === 'vod') return { uri: item.url, userAgent: item.userAgent || baseUA, isLive: false };
+  if (item.kind === 'vod') {
+    return { uri: item.url, userAgent: item.userAgent || baseUA, isLive: false, title: item.title, subtitle: item.subtitle, artwork: item.poster };
+  }
 
   const ch = lib.byId[item.channelId];
   if (!ch || !playlist) return null;
   const ua = ch.userAgent || baseUA;
+  const meta = { title: ch.name, subtitle: item.kind === 'catchup' ? item.program.title : playlist.name, artwork: ch.logo };
 
   if (item.kind === 'live') {
     if (playlist.type === 'xtream' && ch.streamId) {
       const ext = preferredLiveExt(settings.prefs.streamFormat, lib.account?.formats ?? []);
       const uri = xtreamLiveUrl(playlist, ch.streamId, ext);
-      return { uri, userAgent: ua, isLive: true, fallback: swapExt(uri) };
+      return { uri, userAgent: ua, isLive: true, fallback: swapExt(uri), ...meta };
     }
-    return { uri: ch.url, userAgent: ua, isLive: true, fallback: undefined };
+    return { uri: ch.url, userAgent: ua, isLive: true, fallback: undefined, ...meta };
   }
 
   // catch-up
   const p = item.program;
-  if (playlist.type === 'demo') return { uri: ch.url, userAgent: ua, isLive: false };
+  if (playlist.type === 'demo') return { uri: ch.url, userAgent: ua, isLive: false, ...meta };
   if (playlist.type === 'xtream' && ch.streamId) {
     // Panels support timeshift as MPEG-TS most reliably; iOS plays it through VLC
     const ext = Platform.OS === 'web' ? 'm3u8' : 'ts';
     const uri = xtreamCatchupUrl(playlist, ch.streamId, p, lib.account?.timezone, ext);
-    return { uri, userAgent: ua, isLive: false, fallback: swapExt(uri) };
+    return { uri, userAgent: ua, isLive: false, fallback: swapExt(uri), ...meta };
   }
   const uri = m3uCatchupUrl(ch, p);
-  return uri ? { uri, userAgent: ua, isLive: false } : null;
+  return uri ? { uri, userAgent: ua, isLive: false, ...meta } : null;
+}
+
+/** Channel ids of a guide group (including the virtual Favorites / Recent / All groups). */
+export function groupChannelIds(groupId: string): string[] {
+  const lib = useLibrary.getState();
+  const pid = lib.playlistId;
+  const st = useSettings.getState();
+  if (groupId === FAV) return (pid ? st.favorites[pid] ?? [] : []).filter((id) => lib.byId[id]);
+  if (groupId === RECENT) return (pid ? st.recents[pid] ?? [] : []).filter((id) => lib.byId[id]);
+  const g = groupId === ALL ? undefined : lib.groups.find((x) => x.id === groupId);
+  return g ? g.channelIds : lib.channels.map((c) => c.id);
+}
+
+/** Previous/next channel in the current group — used by media keys, Alexa and the browser media session. */
+export function zapChannel(delta: number) {
+  const pl = usePlayer.getState();
+  if (pl.item?.kind !== 'live') return;
+  const ids = groupChannelIds(pl.groupId);
+  if (!ids.length) return;
+  const i = Math.max(0, ids.indexOf(pl.item.channelId));
+  pl.playChannel(ids[(((i + delta) % ids.length) + ids.length) % ids.length]);
 }

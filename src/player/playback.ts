@@ -16,7 +16,28 @@ export interface PlaybackCommands {
   seekBy: (sec: number) => void;
   setAudio: (index: number) => void;
   setSubtitle: (index: number) => void;
+  setRate: (rate: number) => void;
+  setMuted: (muted: boolean) => void;
+  /** index into `qualities`, -1 = automatic (ABR) */
+  setQuality: (index: number) => void;
+  togglePip: () => void;
+  /** browser fullscreen (web only) */
+  toggleFullscreen: () => void;
 }
+
+/** What the active engine can do on this platform; the player UI only offers these. */
+export interface Capabilities {
+  speed: boolean;
+  mute: boolean;
+  quality: boolean;
+  pip: boolean;
+  airplay: boolean;
+  fullscreen: boolean;
+}
+
+export const NO_CAPS: Capabilities = { speed: false, mute: false, quality: false, pip: false, airplay: false, fullscreen: false };
+
+export const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 interface PlaybackState {
   status: PlaybackStatus;
@@ -28,6 +49,18 @@ interface PlaybackState {
   audioIndex: number;
   subtitleIndex: number;
   fit: Fit;
+  rate: number;
+  muted: boolean;
+  qualities: Track[];
+  /** -1 = automatic */
+  qualityIndex: number;
+  /** label of the rendition ABR picked, e.g. "720p" */
+  autoQuality?: string;
+  pip: boolean;
+  engine: 'native' | 'vlc' | 'web';
+  caps: Capabilities;
+  /** live auto-reconnect attempt in progress (0 = none) */
+  reconnect: number;
   cmd: PlaybackCommands;
   set: (p: Partial<Omit<PlaybackState, 'set'>>) => void;
 }
@@ -44,7 +77,27 @@ export const usePlayback = create<PlaybackState>((set) => ({
   audioIndex: -1,
   subtitleIndex: -1,
   fit: 'contain',
-  cmd: { play: noop, pause: noop, seekTo: noop, seekBy: noop, setAudio: noop, setSubtitle: noop },
+  rate: 1,
+  muted: false,
+  qualities: [],
+  qualityIndex: -1,
+  pip: false,
+  engine: 'native',
+  caps: NO_CAPS,
+  reconnect: 0,
+  cmd: {
+    play: noop,
+    pause: noop,
+    seekTo: noop,
+    seekBy: noop,
+    setAudio: noop,
+    setSubtitle: noop,
+    setRate: noop,
+    setMuted: noop,
+    setQuality: noop,
+    togglePip: noop,
+    toggleFullscreen: noop,
+  },
   set: (p) => set(p),
 }));
 

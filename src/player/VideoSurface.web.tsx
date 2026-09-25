@@ -38,7 +38,17 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
 
   // commands
   useEffect(() => {
+    const doc = typeof document !== 'undefined' ? (document as any) : null;
     set({
+      engine: 'web',
+      caps: {
+        speed: true,
+        mute: true,
+        quality: false,
+        pip: !!doc?.pictureInPictureEnabled,
+        airplay: false,
+        fullscreen: !!doc?.fullscreenEnabled,
+      },
       cmd: {
         play: () => void videoRef.current?.play().catch(() => {}),
         pause: () => videoRef.current?.pause(),
@@ -59,6 +69,34 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
             hlsRef.current.subtitleDisplay = i >= 0;
           }
           set({ subtitleIndex: i });
+        },
+        setRate: (rate) => {
+          if (videoRef.current) videoRef.current.playbackRate = rate;
+          set({ rate });
+        },
+        setMuted: (muted) => {
+          if (videoRef.current) videoRef.current.muted = muted;
+          set({ muted });
+        },
+        setQuality: (i) => {
+          const hls = hlsRef.current;
+          if (!hls) return;
+          const q = usePlayback.getState().qualities[i];
+          // qualities are listed best-first; the id is hls.js' level index
+          hls.currentLevel = q ? Number(q.id) : -1;
+          set({ qualityIndex: q ? i : -1 });
+        },
+        togglePip: () => {
+          const v = videoRef.current as any;
+          if (!v || !doc?.pictureInPictureEnabled) return;
+          if (doc.pictureInPictureElement) void doc.exitPictureInPicture();
+          else void v.requestPictureInPicture?.().catch(() => {});
+        },
+        toggleFullscreen: () => {
+          if (!doc?.fullscreenEnabled) return;
+          // the whole app goes fullscreen so Nova's own controls stay on top of the video
+          if (doc.fullscreenElement) void doc.exitFullscreen();
+          else void doc.documentElement.requestFullscreen?.().catch(() => {});
         },
       },
     });
@@ -84,6 +122,10 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         set({ position: v.currentTime, duration: isFinite(v.duration) ? v.duration : 0, status });
       }),
       on('durationchange', () => set({ duration: isFinite(v.duration) ? v.duration : 0 })),
+      on('volumechange', () => set({ muted: v.muted })),
+      on('ratechange', () => set({ rate: v.playbackRate })),
+      on('enterpictureinpicture', () => set({ pip: true })),
+      on('leavepictureinpicture', () => set({ pip: false })),
     ];
     return () => offs.forEach((f) => f());
   }, [set]);
@@ -116,7 +158,22 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
       set({ status: 'idle', position: 0, duration: 0, error: undefined });
       return;
     }
-    set({ status: 'loading', error: undefined, position: 0, duration: 0, audioTracks: [], subtitleTracks: [], audioIndex: -1, subtitleIndex: -1 });
+    set({
+      status: 'loading',
+      error: undefined,
+      position: 0,
+      duration: 0,
+      audioTracks: [],
+      subtitleTracks: [],
+      audioIndex: -1,
+      subtitleIndex: -1,
+      qualities: [],
+      qualityIndex: -1,
+      autoQuality: undefined,
+      rate: 1,
+      caps: { ...usePlayback.getState().caps, quality: false },
+    });
+    video.playbackRate = 1;
 
     const candidates = [source.uri, source.fallback].filter(Boolean) as string[];
     const attempts: { uri: string; engine: Engine }[] = candidates.flatMap((uri) => enginesFor(uri, video).map((engine) => ({ uri, engine })));
@@ -132,9 +189,11 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         video.addEventListener('loadedmetadata', seek);
       }
       video.play().catch((e) => {
-        if (cancelled) return;
-        // Autoplay blocked: user needs to press play
-        if (e?.name === 'NotAllowedError') set({ status: 'paused' });
+        if (cancelled || e?.name !== 'NotAllowedError') return;
+        // Browsers block autoplay with sound: start muted (the player offers "tap to unmute")
+        video.muted = true;
+        set({ muted: true });
+        video.play().catch(() => !cancelled && set({ status: 'paused' }));
       });
     };
 
@@ -161,7 +220,23 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         });
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          // Quality menu: one entry per resolution, best first ("Auto" = ABR)
+          const seen = new Set<number>();
+          const levels = hls.levels
+            .map((l, i) => ({ i, h: l.height || 0, br: l.bitrate || 0 }))
+            .filter((l) => l.h > 0)
+            .sort((a, b) => b.h - a.h || b.br - a.br)
+            .filter((l) => (seen.has(l.h) ? false : (seen.add(l.h), true)));
+          set({
+            qualities: levels.map((l) => ({ id: String(l.i), label: `${l.h}p` })),
+            qualityIndex: -1,
+            caps: { ...usePlayback.getState().caps, quality: levels.length > 1 },
+          });
           startPlay();
+        });
+        hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
+          const h = hls.levels[data.level]?.height;
+          set({ autoQuality: h ? `${h}p` : undefined });
         });
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
           set({

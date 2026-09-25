@@ -1,5 +1,6 @@
 import AVFoundation
 import ExpoModulesCore
+import MediaPlayer
 import MobileVLCKit
 import UIKit
 
@@ -19,6 +20,10 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   private var lastProgressAt: TimeInterval = 0
   private var tracksSignature = ""
   private var watchdog: Timer?
+  private var nowPlayingTitle: String?
+  private var nowPlayingArtist: String?
+  private var remoteTargets: [(MPRemoteCommand, Any)] = []
+  private var backgroundObserver: NSObjectProtocol?
 
   var fit: String = "contain" {
     didSet { applyFit() }
@@ -32,9 +37,17 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     videoView.frame = bounds
     videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     addSubview(videoView)
+    // Video apps pause when sent to the background (VLC has no Picture in Picture)
+    backgroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      guard let p = self?.player, p.isPlaying else { return }
+      p.pause()
+    }
   }
 
   deinit {
+    if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     watchdog?.invalidate()
     player?.delegate = nil
     player?.stop()
@@ -70,6 +83,8 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     if key == sourceKey, player != nil { return }
     sourceKey = key
     isLive = (source["isLive"] as? Bool) ?? false
+    nowPlayingTitle = source["title"] as? String
+    nowPlayingArtist = source["subtitle"] as? String
 
     stopPlayer()
     configureAudioSession()
@@ -106,6 +121,55 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     }
     player = nil
     UIApplication.shared.isIdleTimerDisabled = false
+    clearNowPlaying()
+  }
+
+  // MARK: - Now Playing (lock screen / Control Center)
+
+  private func registerRemoteCommands() {
+    guard remoteTargets.isEmpty else { return }
+    let center = MPRemoteCommandCenter.shared()
+    func add(_ command: MPRemoteCommand, _ handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
+      command.isEnabled = true
+      remoteTargets.append((command, command.addTarget(handler: handler)))
+    }
+    add(center.playCommand) { [weak self] _ in self?.player?.play(); return .success }
+    add(center.pauseCommand) { [weak self] _ in self?.player?.pause(); return .success }
+    add(center.togglePlayPauseCommand) { [weak self] _ in
+      guard let p = self?.player else { return .noActionableNowPlayingItem }
+      if p.isPlaying { p.pause() } else { p.play() }
+      return .success
+    }
+    center.skipForwardCommand.preferredIntervals = [10]
+    center.skipBackwardCommand.preferredIntervals = [10]
+    add(center.skipForwardCommand) { [weak self] _ in self?.seek(by: 10); return .success }
+    add(center.skipBackwardCommand) { [weak self] _ in self?.seek(by: -10); return .success }
+    add(center.changePlaybackPositionCommand) { [weak self] event in
+      guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+      self?.seek(to: e.positionTime)
+      return .success
+    }
+  }
+
+  private func updateNowPlaying() {
+    guard let p = player else { return }
+    registerRemoteCommands()
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: nowPlayingTitle ?? "Nova",
+      MPNowPlayingInfoPropertyIsLiveStream: isLive,
+      MPNowPlayingInfoPropertyPlaybackRate: p.isPlaying ? Double(p.rate) : 0.0,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: Double(p.time.intValue) / 1000,
+    ]
+    if let artist = nowPlayingArtist { info[MPMediaItemPropertyArtist] = artist }
+    let length = Double(p.media?.length.intValue ?? 0) / 1000
+    if length > 0 { info[MPMediaItemPropertyPlaybackDuration] = length }
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+  }
+
+  private func clearNowPlaying() {
+    for (command, target) in remoteTargets { command.removeTarget(target) }
+    remoteTargets.removeAll()
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
   }
 
   private func configureAudioSession() {
@@ -155,6 +219,15 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
   func setSubtitleTrack(_ id: Int) {
     player?.currentVideoSubTitleIndex = Int32(id)
     emitTracks(force: true)
+  }
+
+  func setRate(_ rate: Double) {
+    player?.rate = Float(rate)
+    updateNowPlaying()
+  }
+
+  func setMuted(_ muted: Bool) {
+    player?.audio?.isMuted = muted
   }
 
   // MARK: - Fit (contain / cover / fill)
@@ -228,9 +301,11 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
       emit("playing")
       applyFit()
       emitTracks()
+      updateNowPlaying()
       UIApplication.shared.isIdleTimerDisabled = true
     case .paused:
       emit("paused")
+      updateNowPlaying()
       UIApplication.shared.isIdleTimerDisabled = false
     case .ended:
       emit("ended")
@@ -261,5 +336,6 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     let duration = Double(p.media?.length.intValue ?? 0) / 1000
     onProgress(["position": max(0, position), "duration": max(0, duration)])
     emitTracks()
+    if Int(now) % 5 == 0 { updateNowPlaying() }
   }
 }

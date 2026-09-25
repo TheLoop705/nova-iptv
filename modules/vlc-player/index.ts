@@ -15,6 +15,9 @@ export interface VlcSource {
   isLive?: boolean;
   /** change to force a reload of the same uri */
   nonce?: number;
+  /** lock screen / Control Center metadata */
+  title?: string;
+  subtitle?: string;
 }
 
 export interface VlcPlayerRef {
@@ -24,6 +27,8 @@ export interface VlcPlayerRef {
   seekBy(seconds: number): Promise<void>;
   setAudioTrack(id: number): Promise<void>;
   setSubtitleTrack(id: number): Promise<void>;
+  setRate(rate: number): Promise<void>;
+  setMuted(muted: boolean): Promise<void>;
 }
 
 export interface VlcPlayerViewProps {

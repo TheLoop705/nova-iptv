@@ -38,6 +38,14 @@ public class VlcPlayerModule: Module {
       AsyncFunction("setSubtitleTrack") { (view: VlcPlayerView, id: Int) in
         view.setSubtitleTrack(id)
       }.runOnQueue(.main)
+
+      AsyncFunction("setRate") { (view: VlcPlayerView, rate: Double) in
+        view.setRate(rate)
+      }.runOnQueue(.main)
+
+      AsyncFunction("setMuted") { (view: VlcPlayerView, muted: Bool) in
+        view.setMuted(muted)
+      }.runOnQueue(.main)
     }
   }
 }

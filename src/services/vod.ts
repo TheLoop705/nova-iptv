@@ -1,4 +1,4 @@
-import type { Episode, MovieInfo, SeriesInfo, SeriesItem, VodItem } from '../types';
+import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } from '../types';
 import { useSettings } from '../store/settings';
 import { useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
@@ -33,21 +33,54 @@ export function playMovie(item: VodItem, fromStart = false) {
   );
 }
 
+const seriesInfoCache = new Map<number, SeriesInfo>();
+
+/** The episode after `ep`: next in the season, else the first of the following season. */
+export function nextEpisode(series: SeriesItem, ep: Episode): Episode | undefined {
+  const info = seriesInfoCache.get(series.seriesId);
+  if (!info) return undefined;
+  const seasons = info.seasons;
+  const si = seasons.findIndex((s) => s.season === ep.season);
+  if (si < 0) return undefined;
+  const ei = seasons[si].episodes.findIndex((e) => e.id === ep.id);
+  if (ei >= 0 && ei + 1 < seasons[si].episodes.length) return seasons[si].episodes[ei + 1];
+  return seasons.slice(si + 1).find((s) => s.episodes.length)?.episodes[0];
+}
+
+function episodeItem(series: SeriesItem, ep: Episode) {
+  return {
+    kind: 'vod' as const,
+    key: episodeKey(ep),
+    title: series.name,
+    subtitle: `S${ep.season} E${ep.episode} · ${ep.title}`,
+    url: ep.url,
+    poster: ep.image ?? series.poster,
+    userAgent: activePlaylist()?.userAgent,
+  };
+}
+
 export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
-  const key = episodeKey(ep);
-  const progress = useSettings.getState().vodProgress[key];
+  const progress = useSettings.getState().vodProgress[episodeKey(ep)];
+  const after = nextEpisode(series, ep);
   usePlayer.getState().playVod(
-    {
-      kind: 'vod',
-      key,
-      title: series.name,
-      subtitle: `S${ep.season} E${ep.episode} · ${ep.title}`,
-      url: ep.url,
-      poster: ep.image ?? series.poster,
-      userAgent: activePlaylist()?.userAgent,
-    },
+    { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined },
     fromStart ? undefined : progress?.pos
   );
+}
+
+/** Play an "Up next" item, keeping the chain going to the episode after it. */
+export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>) {
+  for (const [seriesId, info] of seriesInfoCache) {
+    for (const season of info.seasons) {
+      const ep = season.episodes.find((e) => episodeKey(e) === next.key);
+      if (!ep) continue;
+      const series = { seriesId, name: next.title, poster: next.poster } as SeriesItem;
+      const after = nextEpisode(series, ep);
+      usePlayer.getState().playVod({ ...next, next: after ? episodeItem(series, after) : undefined });
+      return;
+    }
+  }
+  usePlayer.getState().playVod(next);
 }
 
 export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
@@ -59,7 +92,7 @@ export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
 export async function loadSeriesInfo(item: SeriesItem): Promise<SeriesInfo | null> {
   const p = activePlaylist();
   if (!p) return null;
-  if (p.type === 'demo') return demoSeriesInfo(item.seriesId);
-  if (p.type === 'xtream') return xtreamSeriesInfo(p, item.seriesId);
-  return null;
+  const info = p.type === 'demo' ? demoSeriesInfo(item.seriesId) : p.type === 'xtream' ? await xtreamSeriesInfo(p, item.seriesId) : null;
+  if (info) seriesInfoCache.set(item.seriesId, info);
+  return info;
 }

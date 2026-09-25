@@ -147,6 +147,7 @@ export function SettingsScreen() {
     });
     r.push({ kind: 'item', id: 'preview', label: 'Preview in TV guide', icon: 'picture-in-picture-top-right', toggle: true, on: prefs.previewInGuide, run: () => setPrefs({ previewInGuide: !prefs.previewInGuide }) });
     r.push({ kind: 'item', id: 'autostart', label: 'Start with last channel', icon: 'play-box-outline', toggle: true, on: prefs.startWithLastChannel, run: () => setPrefs({ startWithLastChannel: !prefs.startWithLastChannel }) });
+    r.push({ kind: 'item', id: 'autonext', label: 'Autoplay next episode', icon: 'skip-next-outline', toggle: true, on: prefs.autoplayNext ?? true, run: () => setPrefs({ autoplayNext: !(prefs.autoplayNext ?? true) }) });
     r.push({ kind: 'item', id: 'ua', label: 'User-Agent', icon: 'badge-account-horizontal-outline', value: prefs.userAgent ? 'Custom' : 'Default', detail: prefs.userAgent || DEFAULT_UA, run: () => setUaEditing(true) });
     if (Platform.OS === 'ios') {
       const label = { auto: 'Automatic', vlc: 'Always VLC', native: 'Always Apple' } as const;
@@ -188,7 +189,7 @@ export function SettingsScreen() {
     r.push({
       kind: 'item',
       id: 'about',
-      label: 'Nova IPTV 1.1',
+      label: 'Nova IPTV 1.2',
       icon: 'information-outline',
       value: Platform.OS === 'web' ? 'Web' : Platform.isTV ? 'Android TV' : Platform.OS === 'ios' ? 'iOS' : 'Android',
       detail: `${channelsCount} channels loaded`,

@@ -54,7 +54,7 @@ class RemoteKeysModule : Module() {
     private val CAPTURED: Set<Int> = setOf(
       19, 20, 21, 22, 23, 66, 160, 96, 82,
       85, 126, 127, 89, 90, 92, 93, 166, 167, 165, 172,
-      84, 219, 231
+      84, 219, 231, 175, 91
     ) + (7..16)
 
     /** Returns true when the key was forwarded to JS and must not reach Android's focus system. */
