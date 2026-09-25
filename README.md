@@ -79,7 +79,14 @@ npx expo run:ios --configuration Release        # simulator
 # or open ios/Nova.xcworkspace in Xcode, set your team, and run on a device / archive
 ```
 
-AVPlayer only plays HLS, not raw MPEG-TS. For Xtream playlists Nova requests `.m3u8` on iOS automatically, and for `…/123.ts` M3U links it tries the `.m3u8` variant first.
+iOS uses two playback engines (Settings → Playback → Video player):
+
+- **Apple's player (AVPlayer)** for HLS and MP4: hardware-friendly and battery-efficient. Nova asks Xtream panels for `.m3u8` live streams on iOS.
+- **VLC (MobileVLCKit)** for everything AVPlayer can't open (MKV, AVI, raw MPEG-TS, FLV, extension-less panel links, MP2 audio, …), and automatically whenever AVPlayer fails on a stream. Most Xtream movies are MKV, so they play through VLC.
+
+`nova://play?url=<stream-url>&title=<name>` opens any stream URL directly (handy for testing a link).
+
+MobileVLCKit is LGPL-2.1 and is pulled in from CocoaPods (~260 MB download on first `pod install`).
 
 ## Web
 

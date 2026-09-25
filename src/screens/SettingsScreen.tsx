@@ -148,6 +148,27 @@ export function SettingsScreen() {
     r.push({ kind: 'item', id: 'preview', label: 'Preview in TV guide', icon: 'picture-in-picture-top-right', toggle: true, on: prefs.previewInGuide, run: () => setPrefs({ previewInGuide: !prefs.previewInGuide }) });
     r.push({ kind: 'item', id: 'autostart', label: 'Start with last channel', icon: 'play-box-outline', toggle: true, on: prefs.startWithLastChannel, run: () => setPrefs({ startWithLastChannel: !prefs.startWithLastChannel }) });
     r.push({ kind: 'item', id: 'ua', label: 'User-Agent', icon: 'badge-account-horizontal-outline', value: prefs.userAgent ? 'Custom' : 'Default', detail: prefs.userAgent || DEFAULT_UA, run: () => setUaEditing(true) });
+    if (Platform.OS === 'ios') {
+      const label = { auto: 'Automatic', vlc: 'Always VLC', native: 'Always Apple' } as const;
+      r.push({
+        kind: 'item',
+        id: 'iosplayer',
+        label: 'Video player',
+        icon: 'play-box-multiple-outline',
+        detail: "VLC plays MKV, AVI and TS that Apple's player can't",
+        value: label[prefs.iosPlayer ?? 'auto'],
+        run: () =>
+          openSheet({
+            title: 'Video player',
+            subtitle: "Automatic uses Apple's player for HLS and MP4, and VLC for everything else or when Apple's player fails.",
+            options: (['auto', 'vlc', 'native'] as const).map((v) => ({
+              label: label[v],
+              selected: (prefs.iosPlayer ?? 'auto') === v,
+              onSelect: () => setPrefs({ iosPlayer: v }),
+            })),
+          }),
+      });
+    }
 
     r.push({ kind: 'header', label: 'Interface' });
     r.push({ kind: 'item', id: 'clock', label: '24-hour clock', icon: 'clock-outline', toggle: true, on: prefs.clock24, run: () => setPrefs({ clock24: !prefs.clock24 }) });

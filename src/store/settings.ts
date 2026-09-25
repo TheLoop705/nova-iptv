@@ -13,6 +13,8 @@ export interface Prefs {
   epgFutureDays: number;
   showChannelNumbers: boolean;
   previewInGuide: boolean;
+  /** iPhone/iPad engine: auto = AVPlayer for HLS/MP4, VLC for MKV/AVI/TS and AVPlayer failures */
+  iosPlayer: 'auto' | 'vlc' | 'native';
 }
 
 export const defaultPrefs: Prefs = {
@@ -25,6 +27,7 @@ export const defaultPrefs: Prefs = {
   epgFutureDays: 3,
   showChannelNumbers: true,
   previewInGuide: true,
+  iosPlayer: 'auto',
 };
 
 export type VodFav = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };

@@ -141,6 +141,7 @@ export function demoMovies(): VodItem[] {
     m('bipbop43', 'BipBop 4:3', 'test', VOD.bipbop43, '2012', '5.0'),
     m('wowza', 'Wowza ID3 Test', 'test', VOD.wowza, '2016', '4.8'),
     m('deltatre', 'Discontinuity Test', 'test', VOD.deltatre, '2019', '4.5'),
+    m('mkv', 'MKV Test (Matroska)', 'test', 'https://test-videos.co.uk/vids/bigbuckbunny/mkv/720/Big_Buck_Bunny_720_10s_5MB.mkv', '2008', '5.0'),
   ];
 }
 

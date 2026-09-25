@@ -56,3 +56,16 @@ export function guessContentType(uri: string): 'hls' | 'dash' | 'progressive' | 
   if (/\.(ts|mp4|mkv|m4v|mov|avi|webm|mp3|aac)$/.test(path)) return 'progressive';
   return 'auto';
 }
+
+/**
+ * iOS only: should this URL go straight to VLC instead of AVPlayer?
+ * AVPlayer handles HLS and MP4/MOV; containers like MKV, AVI and raw MPEG-TS it can't open at all.
+ */
+export function preferVlc(uri: string): boolean {
+  const path = uri.toLowerCase().split('#')[0].split('?')[0];
+  if (guessContentType(uri) === 'hls') return false;
+  if (/\.(mp4|m4v|mov|m4a|mp3|aac|wav)$/.test(path)) return false;
+  if (/\.(mkv|avi|ts|m2ts|mts|flv|wmv|asf|mpg|mpeg|vob|divx|xvid|webm|ogv|ogg|3gp|rmvb|rm|mka)$/.test(path)) return true;
+  // Extension-less IPTV links (http://host/user/pass/123) are almost always MPEG-TS
+  return !/\.[a-z0-9]{2,5}$/.test(path);
+}

@@ -67,6 +67,7 @@
         }
       ],
       "./plugins/withAndroidTV"
-    ]
+    ],
+    "scheme": "nova"
   }
 }

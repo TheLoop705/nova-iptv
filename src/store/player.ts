@@ -101,11 +101,6 @@ export function resolveSource(item: PlayItem): Source | null {
       const uri = xtreamLiveUrl(playlist, ch.streamId, ext);
       return { uri, userAgent: ua, isLive: true, fallback: swapExt(uri) };
     }
-    // AVPlayer can't do raw MPEG-TS: many panels serve the same stream as HLS
-    if (Platform.OS === 'ios' && /\/\d+\.ts(\?|$)/.test(ch.url)) {
-      const hls = swapExt(ch.url)!;
-      return { uri: hls, userAgent: ua, isLive: true, fallback: ch.url };
-    }
     return { uri: ch.url, userAgent: ua, isLive: true, fallback: undefined };
   }
 
@@ -113,7 +108,8 @@ export function resolveSource(item: PlayItem): Source | null {
   const p = item.program;
   if (playlist.type === 'demo') return { uri: ch.url, userAgent: ua, isLive: false };
   if (playlist.type === 'xtream' && ch.streamId) {
-    const ext = Platform.OS === 'android' ? 'ts' : 'm3u8';
+    // Panels support timeshift as MPEG-TS most reliably; iOS plays it through VLC
+    const ext = Platform.OS === 'web' ? 'm3u8' : 'ts';
     const uri = xtreamCatchupUrl(playlist, ch.streamId, p, lib.account?.timezone, ext);
     return { uri, userAgent: ua, isLive: false, fallback: swapExt(uri) };
   }

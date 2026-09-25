@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Platform, View } from 'react-native';
+import { Linking, Platform, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -55,6 +55,21 @@ function Root() {
     hydrated && hasPlaylists && !editor,
     Layer.dialog + 5
   );
+
+  // nova://play?url=<stream>&title=<name> plays any stream URL directly ("open network stream")
+  useEffect(() => {
+    const open = (link: string | null) => {
+      const m = link && /^nova:\/\/play\?(.*)$/.exec(link);
+      if (!m) return;
+      const q = new URLSearchParams(m[1]);
+      const url = q.get('url');
+      if (!url || !/^https?:\/\//i.test(url)) return;
+      usePlayer.getState().playVod({ kind: 'vod', key: 'url:' + url, title: q.get('title') || url.split('/').pop() || 'Stream', url });
+    };
+    void Linking.getInitialURL().then(open);
+    const sub = Linking.addEventListener('url', (e) => open(e.url));
+    return () => sub.remove();
+  }, []);
 
   // (Re)load the library whenever the active playlist changes
   useEffect(() => {

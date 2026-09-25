@@ -1,9 +1,12 @@
-import React, { useEffect, useRef } from 'react';
-import { type StyleProp, type ViewStyle } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Platform, type StyleProp, type ViewStyle } from 'react-native';
 import { useVideoPlayer, VideoView, type VideoSource } from 'expo-video';
 import { useEventListener } from 'expo';
 import type { Source } from '../store/player';
-import { guessContentType, usePlayback } from './playback';
+import { useSettings } from '../store/settings';
+import { guessContentType, preferVlc, usePlayback } from './playback';
+import { VlcSurface } from './VlcSurface';
+import { VlcPlayerView } from '../../modules/vlc-player';
 
 interface Props {
   source: Source | null;
@@ -21,8 +24,29 @@ function toVideoSource(uri: string, ua: string): VideoSource {
   };
 }
 
-/** Native playback (ExoPlayer on Android/Fire TV, AVPlayer on iOS) via expo-video. */
-export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
+/**
+ * Picks the playback engine. Android/Fire TV: ExoPlayer (handles MKV/TS/HLS itself).
+ * iOS: AVPlayer for HLS/MP4 (hardware-friendly), libVLC for MKV/AVI/raw TS and anything
+ * AVPlayer fails on — AVPlayer can't open those containers at all.
+ */
+export function VideoSurface(props: Props) {
+  const iosPlayer = useSettings((s) => s.prefs.iosPlayer ?? 'auto');
+  const [failedOnNative, setFailedOnNative] = useState<string | null>(null);
+  const vlc = Platform.OS === 'ios' && !!VlcPlayerView;
+  const key = props.source ? `${props.source.uri}#${props.nonce}` : '';
+
+  let engine: 'native' | 'vlc' = 'native';
+  if (vlc && props.source) {
+    if (iosPlayer === 'vlc') engine = 'vlc';
+    else if (iosPlayer === 'auto' && (preferVlc(props.source.uri) || failedOnNative === key)) engine = 'vlc';
+  }
+
+  if (engine === 'vlc') return <VlcSurface {...props} />;
+  return <NativeSurface {...props} onFail={vlc && iosPlayer === 'auto' ? () => setFailedOnNative(key) : undefined} />;
+}
+
+/** expo-video: ExoPlayer on Android/Fire TV, AVPlayer on iOS. */
+function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onFail?: () => void }) {
   const fit = usePlayback((s) => s.fit);
   const set = usePlayback((s) => s.set);
   const triedFallback = useRef(false);
@@ -73,6 +97,12 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
 
   useEventListener(player, 'statusChange', ({ status, error }) => {
     if (status === 'error') {
+      // iOS: hand the stream to VLC instead of retrying AVPlayer
+      if (onFail) {
+        player.pause();
+        onFail();
+        return;
+      }
       if (source?.fallback && !triedFallback.current) {
         triedFallback.current = true;
         player.replace(toVideoSource(source.fallback, source.userAgent), true);
