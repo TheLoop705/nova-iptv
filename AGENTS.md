@@ -11,6 +11,7 @@ Expo SDK 57 / React Native 0.86 app targeting Android TV + Fire TV (APK), iOS an
 - **One video surface** (`src/player/VideoLayer.tsx`) positioned either over the guide's `PreviewSlot` (rect via `useVideoRect`) or fullscreen, so switching views never reloads the stream.
 - Platform splits use file extensions: `*.web.ts(x)` for storage, HTTP picking, video surface, remote input.
 - TV layout is designed on a 960×540 canvas and scaled with `useLayout().s()`; phones (portrait/narrow) get the compact layout.
+- Styling comes from the Nova Night tokens in `src/theme.ts` (`colors`, `space`, `radius`, `typeScale`, `useLayout().type/k/safe`). Focus is always the white `focus` fill; web hover uses `hoverStyle` and must not imitate focus. Don't add hex literals in screens.
 - No Expo Router: navigation is a small zustand store (`src/store/ui.ts`) because screens are driven by the key router.
 
 ## Commands

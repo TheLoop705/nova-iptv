@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Text, TextInput, View } from 'react-native';
-import { colors, fonts, useLayout } from '../theme';
+import { colors, fonts, radius, useLayout } from '../theme';
 import { useSettings, type Prefs } from '../store/settings';
 import { useLibrary } from '../store/library';
 import { useUI } from '../store/ui';
@@ -250,7 +250,7 @@ export function SettingsScreen() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Text style={{ color: colors.text, fontSize: k(22), fontWeight: '800', paddingHorizontal: tv ? s(22) : 16, paddingTop: tv ? s(18) : 14, paddingBottom: tv ? s(6) : 4 }}>Settings</Text>
+      <Text style={{ color: colors.text, fontSize: tv ? s(22) : 28, fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular, paddingHorizontal: tv ? s(22) : 16, paddingTop: tv ? s(18) : 14, paddingBottom: tv ? s(6) : 4 }}>Settings</Text>
       {uaEditing ? (
         <View style={{ marginHorizontal: tv ? s(22) : 16, marginBottom: 10, padding: k(12), backgroundColor: colors.surface, borderRadius: k(10), borderWidth: 1, borderColor: colors.border }}>
           <Text style={{ color: colors.textDim, fontSize: k(11.5), marginBottom: k(6) }}>Custom User-Agent (leave empty for default) — press Enter to save</Text>
@@ -274,12 +274,12 @@ export function SettingsScreen() {
         ref={listRef}
         data={rows}
         keyExtractor={(r, i) => (r.kind === 'header' ? 'h' + r.label : r.id) + i}
-        contentContainerStyle={{ paddingHorizontal: tv ? s(18) : 12, paddingBottom: 40, maxWidth: tv ? s(700) : undefined }}
+        contentContainerStyle={{ paddingHorizontal: tv ? s(18) : 12, paddingBottom: 40, maxWidth: tv ? s(700) : 640, width: '100%' }}
         getItemLayout={(_d, i) => ({ length: rows[i]?.kind === 'header' ? headerH : rowH, offset: offsets[i] ?? 0, index: i })}
         renderItem={({ item: r, index }) =>
           r.kind === 'header' ? (
             <View style={{ height: headerH, justifyContent: 'flex-end', paddingBottom: k(6), paddingLeft: k(10) }}>
-              <Text style={{ color: colors.accent, fontSize: k(11), fontWeight: '800', letterSpacing: 1 }}>{r.label.toUpperCase()}</Text>
+              <Text style={{ color: colors.muted, fontSize: k(11), fontWeight: '800', letterSpacing: 1.1 }}>{r.label.toUpperCase()}</Text>
             </View>
           ) : (
             <Focusable
@@ -288,28 +288,32 @@ export function SettingsScreen() {
                 setIdx(items.findIndex((x) => x.i === index));
                 r.run();
               }}
-              style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(8), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(12), backgroundColor: colors.surface }}
-              focusStyle={{ backgroundColor: colors.focus }}
+              style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(12), backgroundColor: colors.surface }}
+              focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: tv ? 1.02 : 1 }] }}
             >
               {({ focused }) => (
                 <>
-                  <Icon name={r.icon} size={k(18)} color={focused ? colors.focusText : colors.textDim} />
+                  <Icon name={r.icon} size={k(18)} color={focused ? colors.focusText : colors.accent} />
                   <View style={{ flex: 1, marginLeft: k(12) }}>
                     <Text numberOfLines={1} style={{ color: focused ? colors.focusText : colors.text, fontSize: k(13), fontWeight: '600' }}>
                       {r.label}
                     </Text>
                     {r.detail ? (
-                      <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(10.5), marginTop: 1 }}>
+                      <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 1 }}>
                         {r.detail}
                       </Text>
                     ) : null}
                   </View>
                   {r.toggle ? (
-                    <View style={{ width: k(34), height: k(20), borderRadius: k(10), backgroundColor: r.on ? colors.accent : focused ? '#C9CFD9' : colors.surface3, justifyContent: 'center', paddingHorizontal: k(2) }}>
-                      <View style={{ width: k(16), height: k(16), borderRadius: k(8), backgroundColor: '#fff', alignSelf: r.on ? 'flex-end' : 'flex-start' }} />
+                    <View
+                      accessibilityRole="switch"
+                      accessibilityState={{ checked: !!r.on }}
+                      style={{ width: k(38), height: k(22), borderRadius: radius.pill, backgroundColor: r.on ? colors.accentFill : focused ? colors.focusDim : colors.borderStrong, justifyContent: 'center', paddingHorizontal: k(2) }}
+                    >
+                      <View style={{ width: k(18), height: k(18), borderRadius: radius.pill, backgroundColor: colors.onAccent, alignSelf: r.on ? 'flex-end' : 'flex-start' }} />
                     </View>
                   ) : r.value ? (
-                    <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.textDim, fontSize: k(11.5), maxWidth: '45%' }}>
+                    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.textDim, fontSize: k(11.5), maxWidth: '45%' }}>
                       {r.value}
                     </Text>
                   ) : null}

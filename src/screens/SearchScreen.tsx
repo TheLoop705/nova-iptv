@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native';
-import { colors, fonts, useLayout } from '../theme';
+import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
 import { useUI } from '../store/ui';
@@ -187,11 +187,12 @@ export function SearchScreen() {
 
   return (
     <View style={{ flex: 1, padding: tv ? s(22) : 16 }}>
-      <Text style={{ color: colors.text, fontSize: k(22), fontWeight: '800', marginBottom: k(12) }}>Search</Text>
+      <Text style={{ color: colors.text, fontSize: tv ? s(22) : 28, fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular, marginBottom: k(12) }}>Search</Text>
       <Focusable
         focused={zone === 'input'}
         onPress={() => inputRef.current?.focus()}
-        style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface2, borderRadius: k(10), paddingHorizontal: k(12), height: k(42), borderWidth: 2, borderColor: 'transparent' }}
+        style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface2, borderRadius: k(radius.md), paddingHorizontal: k(12), height: tv ? s(42) : 48, borderWidth: 2, borderColor: colors.border }}
+        hoverStyle={{ borderColor: colors.borderStrong }}
         focusStyle={{ borderColor: colors.focus }}
       >
         <Icon name="magnify" size={k(18)} color={colors.textDim} />
@@ -216,14 +217,14 @@ export function SearchScreen() {
             onPress={toggleVoice}
             accessibilityLabel={listening ? 'Stop voice search' : 'Search by voice'}
             testID="search-mic"
-            style={{ marginLeft: k(8), width: k(30), height: k(30), borderRadius: k(15), alignItems: 'center', justifyContent: 'center', backgroundColor: listening ? colors.live : 'transparent' }}
+            style={{ marginLeft: k(8), width: k(30), height: k(30), borderRadius: k(15), alignItems: 'center', justifyContent: 'center', backgroundColor: listening ? colors.liveFill : 'transparent' }}
           >
-            <Icon name={listening ? 'microphone' : 'microphone-outline'} size={k(18)} color={listening ? '#fff' : colors.textDim} />
+            <Icon name={listening ? 'microphone' : 'microphone-outline'} size={k(18)} color={listening ? colors.onLive : colors.textDim} />
           </Pressable>
         ) : null}
       </Focusable>
       {listening ? <Text style={{ color: colors.live, fontSize: k(12), marginTop: k(8), fontWeight: '600' }}>Listening… say a channel, movie or show</Text> : null}
-      {voiceError ? <Text style={{ color: colors.warning, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
+      {voiceError ? <Text style={{ color: colors.star, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
 
       {q.trim().length >= 2 && !results.length ? (
         <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{q.trim()}”.</Text>
@@ -241,7 +242,7 @@ export function SearchScreen() {
           <Focusable
             focused={zone === 'results' && index === idx}
             onPress={r.run}
-            style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(8), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
+            style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
             focusStyle={{ backgroundColor: colors.focus }}
           >
             {({ focused }) => (
@@ -258,7 +259,7 @@ export function SearchScreen() {
                     {r.title}
                   </Text>
                   {r.subtitle ? (
-                    <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(11), marginTop: 2 }}>
+                    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
                       {r.subtitle}
                     </Text>
                   ) : null}

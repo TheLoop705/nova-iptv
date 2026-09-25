@@ -3,7 +3,7 @@ import { Linking, Platform, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { colors, useLayout } from './theme';
+import { colors, fonts, useLayout } from './theme';
 import { useActivePlaylist, useSettings } from './store/settings';
 import { useLibrary } from './store/library';
 import { usePlayer } from './store/player';
@@ -113,22 +113,28 @@ function Root() {
   );
 }
 
-/** Web-only global CSS: hide scrollbars on TV-style lists, remove focus outlines. */
+/** Web-only global CSS: brand font, quiet scrollbars, no browser focus rings (JS draws focus), reduced motion. */
 function WebStyles() {
   useEffect(() => {
     const el = document.createElement('style');
     el.textContent = `
-      html, body, #root { background: ${colors.bg}; overscroll-behavior: none; }
+      html, body, #root { background: ${colors.bg}; color: ${colors.text}; overscroll-behavior: none; -webkit-font-smoothing: antialiased; }
+      body { font-family: ${fonts.regular}; }
       *:focus { outline: none; }
+      * { scrollbar-width: thin; scrollbar-color: ${colors.borderStrong} transparent; }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
-      ::-webkit-scrollbar-thumb { background: #2a3140; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb { background: ${colors.border}; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: ${colors.borderStrong}; }
       ::-webkit-scrollbar-track { background: transparent; }
+      ::selection { background: ${colors.accentFill}; color: ${colors.onAccent}; }
       input { caret-color: ${colors.accent}; }
+      input::placeholder { color: ${colors.muted}; }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
     `;
     document.head.appendChild(el);
     const font = document.createElement('link');
     font.rel = 'stylesheet';
-    font.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap';
+    font.href = 'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap';
     document.head.appendChild(font);
     return () => {
       el.remove();

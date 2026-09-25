@@ -2,7 +2,8 @@ import React, { memo, useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { Channel, Program } from '../../types';
 import { cellAt, cellsInRange, type Cell } from '../../services/epg';
-import { colors } from '../../theme';
+import { Platform } from 'react-native';
+import { colors, fonts, radius } from '../../theme';
 import { formatRange } from '../../utils/format';
 import { Logo } from '../../components/Logo';
 import { Icon } from '../../components/Icon';
@@ -57,16 +58,16 @@ export const GuideRow = memo(function GuideRow(p: Props) {
           flexDirection: 'row',
           alignItems: 'center',
           paddingHorizontal: compact ? 6 : s(8),
-          backgroundColor: chanFocused ? colors.focus : colors.surface,
-          borderRadius: s(5),
+          backgroundColor: chanFocused ? colors.focus : p.playing ? colors.nowCell : colors.surface,
+          borderRadius: compact ? radius.sm : s(radius.sm),
           marginRight: s(2),
         }}
       >
         {p.playing ? (
-          <View style={{ position: 'absolute', left: 0, top: s(6), bottom: s(6), width: s(3), borderRadius: 2, backgroundColor: colors.accent }} />
+          <View style={{ position: 'absolute', left: 0, top: s(7), bottom: s(7), width: compact ? 3 : s(3), borderRadius: 2, backgroundColor: chanFocused ? colors.accentFill : colors.accent }} />
         ) : null}
         {p.showNumber && !compact ? (
-          <Text style={{ width: s(30), color: chanFocused ? colors.focusText : colors.muted, fontSize: s(11), fontWeight: '600' }} numberOfLines={1}>
+          <Text style={{ width: s(30), color: chanFocused ? colors.focusDim : colors.muted, fontSize: s(11), fontWeight: '700', fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }} numberOfLines={1}>
             {p.channel.num}
           </Text>
         ) : null}
@@ -74,12 +75,12 @@ export const GuideRow = memo(function GuideRow(p: Props) {
         {!compact ? (
           <Text
             numberOfLines={1}
-            style={{ flex: 1, marginLeft: s(8), color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(12), fontWeight: '600' }}
+            style={{ flex: 1, marginLeft: s(8), color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(12.5), fontWeight: '600', fontFamily: fonts.regular }}
           >
             {p.channel.name}
           </Text>
         ) : null}
-        {p.favorite && !compact ? <Icon name="star" size={s(11)} color={chanFocused ? colors.focusText : colors.warning} /> : null}
+        {p.favorite && !compact ? <Icon name="star" size={s(11)} color={chanFocused ? colors.focusText : colors.star} /> : null}
         {p.channel.catchup && !compact ? (
           <Icon name="history" size={s(11)} color={chanFocused ? colors.focusText : colors.muted} style={{ marginLeft: s(3) }} />
         ) : null}
@@ -94,6 +95,7 @@ export const GuideRow = memo(function GuideRow(p: Props) {
           const past = c.end <= now;
           const current = c.start <= now && c.end > now;
           const bg = focused ? colors.focus : current ? colors.nowCell : past ? colors.pastCell : colors.surface;
+          const hoverBg = current ? colors.surface3 : colors.hover;
           const fg = focused ? colors.focusText : past ? colors.muted : colors.text;
           const clipped = c.start < windowStart;
           const narrow = width < s(64);
@@ -102,34 +104,34 @@ export const GuideRow = memo(function GuideRow(p: Props) {
               key={c.start}
               focusable={false}
               onPress={() => p.onPressCell(p.index, c)}
-              style={{
+              style={(state) => ({
                 position: 'absolute',
                 left,
                 width,
                 top: s(1.5),
                 height: rowH - s(3),
-                backgroundColor: bg,
-                borderRadius: s(5),
-                paddingHorizontal: width > s(20) ? s(7) : 0,
+                backgroundColor: !focused && Platform.OS === 'web' && (state as { hovered?: boolean }).hovered ? hoverBg : bg,
+                borderRadius: compact ? radius.sm : s(radius.sm),
+                paddingHorizontal: width > s(20) ? s(8) : 0,
                 justifyContent: 'center',
                 overflow: 'hidden',
-              }}
+              })}
             >
               {width > s(14) ? (
                 <>
-                  <Text numberOfLines={1} style={{ color: fg, fontSize: compact ? 13 : s(12), fontWeight: current || focused ? '700' : '500' }}>
+                  <Text numberOfLines={1} style={{ color: fg, fontSize: compact ? 14 : s(12.5), fontWeight: current || focused ? '700' : '500', fontFamily: fonts.regular }}>
                     {clipped ? '‹ ' : ''}
                     {c.program ? c.program.title || 'Untitled' : 'No information'}
                   </Text>
                   {!narrow && c.program ? (
-                    <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: compact ? 11 : s(9.5), marginTop: s(1) }}>
+                    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: compact ? 12 : s(11), marginTop: s(1), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>
                       {formatRange(c.start, c.end, p.h24)}
                     </Text>
                   ) : null}
                 </>
               ) : null}
               {current && !focused ? (
-                <View style={{ position: 'absolute', left: 0, bottom: 0, height: s(2), width: Math.max(0, ((now - from) / (to - from)) * width), backgroundColor: 'rgba(76,141,255,0.55)' }} />
+                <View style={{ position: 'absolute', left: 0, bottom: 0, height: compact ? 3 : s(2.5), width: Math.max(0, ((now - from) / (to - from)) * width), backgroundColor: colors.accent }} />
               ) : null}
             </Pressable>
           );

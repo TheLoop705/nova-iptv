@@ -6,7 +6,9 @@ import { useLibrary, useAllGroups, ALL } from '../store/library';
 import { useSettings } from '../store/settings';
 import { useUI } from '../store/ui';
 import { Layer, useKeys, type KeyEvt } from '../input/keys';
-import { colors, useLayout } from '../theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, fonts, radius, useLayout } from '../theme';
+import { Badge } from '../components/Badge';
 import { usePlayback, type Fit } from './playback';
 import { nextProgram, programAt } from '../services/epg';
 import { canCatchup } from '../services/catchup';
@@ -31,9 +33,13 @@ const FIT_LABEL: Record<Fit, string> = { contain: 'Fit', cover: 'Zoom', fill: 'S
 const FIT_NEXT: Record<Fit, Fit> = { contain: 'cover', cover: 'fill', fill: 'contain' };
 
 export function PlayerOverlay() {
-  const { s, mode } = useLayout();
+  const { s, mode, safe } = useLayout();
   const tv = mode === 'tv';
   const k = tv ? s : (n: number) => n * 1.1;
+  // phones in landscape: keep controls clear of the notch and home indicator; TVs: of the overscan
+  const ins = useSafeAreaInsets();
+  const edgeX = Math.max(ins.left, ins.right, safe.x);
+  const edgeY = Math.max(ins.bottom, safe.y);
 
   const item = usePlayer((st) => st.item)!;
   const groupId = usePlayer((st) => st.groupId);
@@ -412,12 +418,12 @@ export function PlayerOverlay() {
 
       {status === 'loading' ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-          <ActivityIndicator size="large" color="#fff" />
+          <ActivityIndicator size="large" color={colors.onVideo} />
         </View>
       ) : null}
 
       {status === 'error' ? (
-        <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)' }]}>
+        <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.videoScrim }]}>
           <Icon name="television-off" size={k(38)} color={colors.textDim} />
           <Text style={{ color: colors.text, fontSize: k(17), fontWeight: '700', marginTop: k(10) }}>Can't play this stream</Text>
           <Text style={{ color: colors.textDim, fontSize: k(12), marginTop: k(6), maxWidth: k(420), textAlign: 'center' }} numberOfLines={3}>
@@ -439,12 +445,12 @@ export function PlayerOverlay() {
         <>
           {/* top bar */}
           <LinearGradient colors={['rgba(0,0,0,0.75)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: k(110) }} pointerEvents="none" />
-          <View style={{ position: 'absolute', left: k(18), right: k(18), top: k(14), flexDirection: 'row', alignItems: 'center' }}>
-            <Pressable focusable={false} onPress={exit} hitSlop={12} style={{ marginRight: k(10) }}>
-              <Icon name="arrow-left" size={k(30)} color="#fff" />
+          <View style={{ position: 'absolute', left: k(18) + edgeX, right: k(18) + edgeX, top: k(14) + Math.max(ins.top, safe.y), flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable focusable={false} onPress={exit} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={{ marginRight: k(10), width: tv ? k(42) : 52, height: tv ? k(42) : 52, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.glass }}>
+              <Icon name="arrow-left" size={k(28)} color={colors.onVideo} />
             </Pressable>
             <View style={{ flex: 1 }} />
-            <Text style={{ color: '#fff', fontSize: k(16), fontWeight: '700' }}>{formatClock(now, prefs.clock24)}</Text>
+            <Text style={{ color: colors.onVideo, fontSize: k(16), fontWeight: '700', fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>{formatClock(now, prefs.clock24)}</Text>
           </View>
 
           {/* center transport for touch */}
@@ -467,15 +473,16 @@ export function PlayerOverlay() {
 
           {/* bottom info panel */}
           <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(300) }} pointerEvents="none" />
-          <View style={{ position: 'absolute', left: k(28), right: k(28), bottom: k(22) }}>
+          <View style={{ position: 'absolute', left: k(28) + edgeX, right: k(28) + edgeX, bottom: k(22) + edgeY }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: k(6) }}>
               {ch ? <Logo uri={ch.logo} name={ch.name} size={k(22)} style={{ marginRight: k(10) }} /> : null}
               <Text numberOfLines={1} style={{ color: colors.textDim, fontSize: k(12.5), fontWeight: '600', flexShrink: 1 }}>
                 {subtitle}
               </Text>
-              {live ? <Tag label="LIVE" color={colors.live} k={k} /> : item.kind === 'catchup' ? <Tag label="CATCH-UP" color={colors.accent} k={k} /> : null}
+              <View style={{ width: k(10) }} />
+              {live ? <Badge label="LIVE" tone="live" /> : item.kind === 'catchup' ? <Badge label="CATCH-UP" tone="catchup" icon="history" /> : null}
             </View>
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: k(22), fontWeight: '800' }}>
+            <Text numberOfLines={1} style={{ color: colors.onVideo, fontSize: k(22), fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular }}>
               {title}
             </Text>
 
@@ -483,16 +490,17 @@ export function PlayerOverlay() {
               <>
                 {program ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(8) }}>
-                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(56) }}>{formatClock(program.start, prefs.clock24)}</Text>
-                    <View style={{ flex: 1, height: k(6), backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 2 }}>
+                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(58), fontVariant: ['tabular-nums'] }}>{formatClock(program.start, prefs.clock24)}</Text>
+                    <View style={{ flex: 1, height: k(6), backgroundColor: colors.glass, borderRadius: radius.pill }}>
                       <View style={{ width: `${Math.min(100, Math.max(0, liveProgress * 100))}%`, height: '100%', backgroundColor: colors.accent, borderRadius: 2 }} />
                     </View>
-                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(56), textAlign: 'right' }}>{formatClock(program.end, prefs.clock24)}</Text>
+                    <Text style={{ color: colors.textDim, fontSize: k(14), width: k(58), textAlign: 'right', fontVariant: ['tabular-nums'] }}>{formatClock(program.end, prefs.clock24)}</Text>
                   </View>
                 ) : null}
                 {next ? (
-                  <Text numberOfLines={1} style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(6) }}>
-                    Next · {formatRange(next.start, next.end, prefs.clock24)}  {next.title}
+                  <Text numberOfLines={1} style={{ color: colors.textDim, fontSize: k(11.5), marginTop: k(6) }}>
+                    <Text style={{ fontWeight: '700', color: colors.text }}>Next </Text>
+                    {formatRange(next.start, next.end, prefs.clock24)} · {next.title}
                   </Text>
                 ) : null}
               </>
@@ -513,13 +521,14 @@ export function PlayerOverlay() {
                     setCtrl(i);
                     runControl(c.id);
                   }}
-                  style={{ flexDirection: 'row', alignItems: 'center', height: Math.max(k(40), TOUCH_MIN), paddingHorizontal: k(16), borderRadius: k(20), backgroundColor: 'rgba(255,255,255,0.12)' }}
-                  focusStyle={{ backgroundColor: colors.focus }}
+                  style={{ flexDirection: 'row', alignItems: 'center', height: tv ? Math.max(k(40), TOUCH_MIN) : 48, paddingHorizontal: k(16), borderRadius: radius.pill, backgroundColor: colors.glass }}
+                  hoverStyle={{ backgroundColor: 'rgba(255,255,255,0.24)' }}
+                  focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.05 }] }}
                 >
                   {({ focused }) => (
                     <>
-                      <Icon name={c.icon} size={k(20)} color={focused ? colors.focusText : c.active ? colors.warning : '#fff'} />
-                      <Text style={{ color: focused ? colors.focusText : '#fff', fontSize: k(15), fontWeight: '700', marginLeft: k(8) }}>{c.label}</Text>
+                      <Icon name={c.icon} size={k(20)} color={focused ? colors.focusText : c.active ? colors.star : colors.onVideo} />
+                      <Text style={{ color: focused ? colors.focusText : colors.onVideo, fontSize: k(15), fontWeight: '700', marginLeft: k(8) }}>{c.label}</Text>
                     </>
                   )}
                 </Focusable>
@@ -531,13 +540,13 @@ export function PlayerOverlay() {
 
       {status === 'paused' && !visible ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Icon name="pause-circle-outline" size={k(56)} color="rgba(255,255,255,0.85)" />
+          <Icon name="pause-circle-outline" size={k(56)} color={colors.onVideo} />
         </View>
       ) : null}
 
       {digits ? (
-        <View pointerEvents="none" style={{ position: 'absolute', top: k(24), right: k(28), backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: k(10), paddingHorizontal: k(18), paddingVertical: k(8) }}>
-          <Text style={{ color: '#fff', fontSize: k(30), fontWeight: '800', letterSpacing: 2 }}>{digits}</Text>
+        <View pointerEvents="none" style={{ position: 'absolute', top: k(24) + safe.y, right: k(28) + edgeX, backgroundColor: colors.videoScrim, borderRadius: k(radius.lg), paddingHorizontal: k(20), paddingVertical: k(8) }}>
+          <Text style={{ color: colors.onVideo, fontSize: k(30), fontWeight: '800', letterSpacing: 2, fontVariant: ['tabular-nums'] }}>{digits}</Text>
         </View>
       ) : null}
 
@@ -575,18 +584,10 @@ const pill = (k: (n: number) => number) => ({
   height: k(34),
   paddingHorizontal: k(22),
   borderRadius: k(17),
-  backgroundColor: 'rgba(255,255,255,0.14)',
+  backgroundColor: colors.glass,
   alignItems: 'center' as const,
   justifyContent: 'center' as const,
 });
-
-function Tag({ label, color, k }: { label: string; color: string; k: (n: number) => number }) {
-  return (
-    <View style={{ backgroundColor: color, borderRadius: k(3), paddingHorizontal: k(5), paddingVertical: k(1), marginLeft: k(10) }}>
-      <Text style={{ color: '#fff', fontSize: k(9), fontWeight: '800', letterSpacing: 0.6 }}>{label}</Text>
-    </View>
-  );
-}
 
 function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void; k: (n: number) => number; big?: boolean }) {
   const size = big ? k(84) : k(62);
@@ -594,17 +595,18 @@ function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void
     <Pressable
       focusable={false}
       onPress={onPress}
-      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' }}
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' }}
     >
-      <Icon name={icon} size={size * 0.52} color="#fff" />
+      <Icon name={icon} size={size * 0.52} color={colors.onVideo} />
     </Pressable>
   );
 }
 
 /** TiviMate-style mini channel list over the left side of the picture. */
 function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelIds: string[]; currentId?: string; onPick: (id: string) => void; onClose: () => void }) {
-  const { s, mode } = useLayout();
+  const { s, mode, safe } = useLayout();
   const k = mode === 'tv' ? s : (n: number) => n * 1.1;
+  const ins = useSafeAreaInsets();
   const byId = useLibrary((st) => st.byId);
   const epg = useLibrary((st) => st.epg);
   const h24 = useSettings((st) => st.prefs.clock24);
@@ -646,7 +648,7 @@ function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelI
   return (
     <View style={StyleSheet.absoluteFill}>
       <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={onClose} />
-      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: k(340), backgroundColor: 'rgba(8,10,15,0.94)', paddingTop: k(16) }}>
+      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: k(340) + Math.max(ins.left, safe.x), paddingLeft: Math.max(ins.left, safe.x), backgroundColor: 'rgba(14,16,21,0.95)', borderRightWidth: 1, borderColor: colors.border, paddingTop: k(16) + Math.max(ins.top, safe.y) }}>
         <FlatList
           ref={ref}
           data={channelIds}
@@ -662,18 +664,18 @@ function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelI
                 focused={i === index}
                 alwaysShowFocus
                 onPress={() => onPick(id)}
-                style={{ height: itemH - k(4), marginHorizontal: k(10), marginVertical: k(2), borderRadius: k(8), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10) }}
+                style={{ height: itemH - k(4), marginHorizontal: k(10), marginVertical: k(2), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: id === currentId ? colors.accentSoft : 'transparent' }}
                 focusStyle={{ backgroundColor: colors.focus }}
               >
                 {({ focused }) => (
                   <>
-                    <Text style={{ width: k(32), color: focused ? colors.focusText : colors.muted, fontSize: k(11), fontWeight: '600' }}>{c.num}</Text>
+                    <Text style={{ width: k(32), color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), fontWeight: '700', fontVariant: ['tabular-nums'] }}>{c.num}</Text>
                     <Logo uri={c.logo} name={c.name} size={k(22)} />
                     <View style={{ flex: 1, marginLeft: k(10) }}>
                       <Text numberOfLines={1} style={{ color: focused ? colors.focusText : id === currentId ? colors.accent : colors.text, fontSize: k(12.5), fontWeight: '700' }}>
                         {c.name}
                       </Text>
-                      <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(10.5), marginTop: k(1) }}>
+                      <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(11), marginTop: k(1) }}>
                         {p ? `${formatClock(p.start, h24)}  ${p.title}` : 'No information'}
                       </Text>
                     </View>

@@ -1,6 +1,9 @@
 import React, { memo, type ReactNode } from 'react';
 import { Pressable, type StyleProp, type ViewStyle, Platform } from 'react-native';
 import { useKeyMode } from '../input/keys';
+import { colors } from '../theme';
+
+const DEFAULT_HOVER: ViewStyle = { backgroundColor: colors.hover };
 
 interface Props {
   focused?: boolean;
@@ -9,6 +12,8 @@ interface Props {
   onHoverIn?: () => void;
   style?: StyleProp<ViewStyle>;
   focusStyle?: StyleProp<ViewStyle>;
+  /** pointer hover on the web; a quieter cue than focus (defaults to the `hover` surface) */
+  hoverStyle?: StyleProp<ViewStyle>;
   /** show the focus style even in pointer/touch mode (e.g. the selected guide cell) */
   alwaysShowFocus?: boolean;
   children: ReactNode | ((state: { focused: boolean; hovered: boolean }) => ReactNode);
@@ -18,7 +23,8 @@ interface Props {
 
 /**
  * Pressable that never takes native focus (JS owns focus on TV) and renders a focus state
- * driven by the screen's key-navigation model.
+ * driven by the screen's key-navigation model. Focus (remote/keyboard) is the white fill;
+ * mouse hover gets its own quieter style so the pointer never fakes a remote focus.
  */
 export const Focusable = memo(function Focusable({
   focused = false,
@@ -27,6 +33,7 @@ export const Focusable = memo(function Focusable({
   onHoverIn,
   style,
   focusStyle,
+  hoverStyle = DEFAULT_HOVER,
   alwaysShowFocus,
   children,
   testID,
@@ -46,12 +53,12 @@ export const Focusable = memo(function Focusable({
       accessibilityLabel={accessibilityLabel}
       style={(state) => {
         const hovered = Platform.OS === 'web' && !!(state as any).hovered;
-        return [style, (show || (hovered && !keyMode)) && focusStyle, state.pressed && { opacity: 0.85 }];
+        return [style, hovered && !keyMode && !show && hoverStyle, show && focusStyle, state.pressed && { opacity: 0.85 }];
       }}
     >
       {(state) => {
         const hovered = Platform.OS === 'web' && !!(state as any).hovered && !keyMode;
-        return typeof children === 'function' ? children({ focused: !!show || hovered, hovered }) : children;
+        return typeof children === 'function' ? children({ focused: !!show, hovered }) : children;
       }}
     </Pressable>
   );

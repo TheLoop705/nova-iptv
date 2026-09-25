@@ -3,7 +3,9 @@ import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, V
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { MovieInfo, SeriesInfo, SeriesItem, VodItem } from '../types';
-import { colors, useLayout } from '../theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, fonts, radius, useLayout } from '../theme';
+import { Chip } from '../components/Chip';
 import { useUI } from '../store/ui';
 import { useSettings } from '../store/settings';
 import { useLibrary } from '../store/library';
@@ -34,7 +36,7 @@ function Backdrop({ uri }: { uri?: string }) {
   return (
     <>
       <Image source={{ uri: imageUrl(uri) }} style={StyleSheet.absoluteFill} contentFit="cover" blurRadius={uri ? 18 : 0} cachePolicy="memory-disk" />
-      <LinearGradient colors={['rgba(7,9,13,0.55)', 'rgba(7,9,13,0.92)', colors.bg]} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={['rgba(7,8,11,0.55)', 'rgba(7,8,11,0.92)', colors.bg]} style={StyleSheet.absoluteFill} />
     </>
   );
 }
@@ -54,6 +56,7 @@ function useFav(kind: 'movie' | 'series', item: VodItem | SeriesItem) {
 
 function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
   const { s, mode } = useLayout();
+  const insetTop = useSafeAreaInsets().top;
   const tv = mode === 'tv';
   const k = tv ? s : (n: number) => n * 1.1;
   const close = () => useUI.getState().setDetail(null);
@@ -96,10 +99,10 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
   return (
     <View style={{ flex: 1 }}>
       <Backdrop uri={info?.backdrop || poster} />
-      <ScrollView contentContainerStyle={{ padding: tv ? s(36) : 20, paddingTop: tv ? s(58) : 60, flexDirection: tv ? 'row' : 'column' }}>
+      <ScrollView contentContainerStyle={{ padding: tv ? s(36) : 20, paddingTop: tv ? s(58) : 60 + insetTop, flexDirection: tv ? 'row' : 'column' }}>
         <Poster uri={poster} name={item.name} width={tv ? s(170) : 160} style={tv ? undefined : { alignSelf: 'center' }} />
         <View style={{ flex: tv ? 1 : undefined, marginLeft: tv ? s(28) : 0, marginTop: tv ? 0 : 18 }}>
-          <Text style={{ color: colors.text, fontSize: k(26), fontWeight: '800' }}>{item.name}</Text>
+          <Text style={{ color: colors.text, fontSize: k(26), lineHeight: k(31), fontWeight: '800', letterSpacing: -0.4, fontFamily: fonts.regular }}>{item.name}</Text>
           <Meta parts={[info?.year || item.year, info?.duration, info?.genre, (info?.rating || item.rating) && `★ ${Number(info?.rating || item.rating).toFixed(1)}`]} k={k} />
           {loading ? <ActivityIndicator color={colors.accent} style={{ alignSelf: 'flex-start', marginTop: k(14) }} /> : null}
           {info?.plot ? (
@@ -108,14 +111,14 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
             </Text>
           ) : null}
           {info?.cast ? (
-            <Text style={{ color: colors.muted, fontSize: k(11), marginTop: k(10) }} numberOfLines={2}>
+            <Text style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(10) }} numberOfLines={2}>
               Cast: {info.cast}
             </Text>
           ) : null}
-          {info?.director ? <Text style={{ color: colors.muted, fontSize: k(11), marginTop: k(3) }}>Director: {info.director}</Text> : null}
+          {info?.director ? <Text style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(3) }}>Director: {info.director}</Text> : null}
           {progress ? (
-            <View style={{ height: k(3), width: k(220), backgroundColor: colors.surface3, borderRadius: 2, marginTop: k(14) }}>
-              <View style={{ height: '100%', width: `${(progress.pos / progress.dur) * 100}%`, backgroundColor: colors.accent, borderRadius: 2 }} />
+            <View style={{ height: k(4), width: k(220), backgroundColor: colors.surface3, borderRadius: radius.pill, marginTop: k(14) }}>
+              <View style={{ height: '100%', width: `${(progress.pos / progress.dur) * 100}%`, backgroundColor: colors.accent, borderRadius: radius.pill }} />
             </View>
           ) : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(18) }}>
@@ -132,6 +135,7 @@ function MovieDetail({ item, active }: { item: VodItem; active: boolean }) {
 
 function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const { s, mode } = useLayout();
+  const insetTop = useSafeAreaInsets().top;
   const tv = mode === 'tv';
   const k = tv ? s : (n: number) => n * 1.1;
   const close = () => useUI.getState().setDetail(null);
@@ -200,10 +204,10 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
 
   const poster = info?.poster || item.poster;
   const header = (
-    <View style={{ flexDirection: 'row', padding: tv ? s(28) : 18, paddingTop: tv ? s(50) : 60 }}>
+    <View style={{ flexDirection: 'row', padding: tv ? s(28) : 18, paddingTop: tv ? s(50) : 60 + insetTop }}>
       <Poster uri={poster} name={item.name} width={tv ? s(110) : 100} />
       <View style={{ flex: 1, marginLeft: tv ? s(22) : 16 }}>
-        <Text style={{ color: colors.text, fontSize: k(24), fontWeight: '800' }} numberOfLines={2}>
+        <Text style={{ color: colors.text, fontSize: k(24), lineHeight: k(29), fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular }} numberOfLines={2}>
           {item.name}
         </Text>
         <Meta parts={[info?.year || item.year, info?.genre || item.genre, (info?.rating || item.rating) && `★ ${Number(info?.rating || item.rating).toFixed(1)}`, seasons.length ? `${seasons.length} season${seasons.length > 1 ? 's' : ''}` : undefined]} k={k} />
@@ -238,11 +242,11 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     setSeason(i);
                     setEp(0);
                   }}
-                  style={{ height: s(32), borderRadius: s(6), paddingHorizontal: s(10), justifyContent: 'center', marginBottom: s(2) }}
+                  style={{ height: s(34), borderRadius: s(radius.sm), paddingHorizontal: s(10), justifyContent: 'center', marginBottom: s(2), backgroundColor: i === season ? colors.accentSoft : 'transparent' }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
                   {({ focused }) => (
-                    <Text style={{ color: focused ? colors.focusText : i === season ? colors.accent : colors.text, fontWeight: i === season ? '700' : '500', fontSize: s(12) }}>
+                    <Text style={{ color: focused ? colors.focusText : colors.text, fontWeight: i === season ? '700' : '500', fontSize: s(12.5) }}>
                       {se.name}
                     </Text>
                   )}
@@ -252,17 +256,15 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }}>
               {seasons.map((se, i) => (
-                <Pressable
+                <Chip
                   key={se.season}
-                  focusable={false}
+                  label={se.name}
+                  selected={i === season}
                   onPress={() => {
                     setSeason(i);
                     setEp(0);
                   }}
-                  style={{ paddingHorizontal: 14, height: 32, borderRadius: 16, justifyContent: 'center', backgroundColor: i === season ? colors.focus : colors.surface2 }}
-                >
-                  <Text style={{ color: i === season ? colors.focusText : colors.text, fontWeight: '600' }}>{se.name}</Text>
-                </Pressable>
+                />
               ))}
             </ScrollView>
           )}
@@ -283,28 +285,28 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     playEpisode(item, e);
                   }}
                   onLongPress={() => playEpisode(item, e, true)}
-                  style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(8) : 10, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: colors.surface, marginBottom: tv ? s(6) : 8 }}
+                  style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
                   {({ focused }) => (
                     <>
-                      <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusText : colors.muted, fontWeight: '800', fontSize: k(13) }}>{e.episode}</Text>
+                      <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
                       <View style={{ flex: 1 }}>
                         <Text numberOfLines={1} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>
                           {e.title}
                         </Text>
                         {e.plot ? (
-                          <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(10.5), marginTop: 2 }}>
+                          <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
                             {e.plot}
                           </Text>
                         ) : null}
                         {pr ? (
-                          <View style={{ height: 3, backgroundColor: focused ? '#C9CFD9' : colors.surface3, borderRadius: 2, marginTop: 5, width: '40%' }}>
-                            <View style={{ height: '100%', width: `${(pr.pos / pr.dur) * 100}%`, backgroundColor: colors.accent, borderRadius: 2 }} />
+                          <View style={{ height: 3, backgroundColor: focused ? colors.focusDim : colors.surface3, borderRadius: radius.pill, marginTop: 5, width: '40%' }}>
+                            <View style={{ height: '100%', width: `${(pr.pos / pr.dur) * 100}%`, backgroundColor: focused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
                           </View>
                         ) : null}
                       </View>
-                      {e.duration ? <Text style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(10.5), marginLeft: 8 }}>{e.duration}</Text> : null}
+                      {e.duration ? <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{e.duration}</Text> : null}
                       <Icon name="play-circle-outline" size={k(20)} color={focused ? colors.focusText : colors.textDim} style={{ marginLeft: 10 }} />
                     </>
                   )}
@@ -320,9 +322,19 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
 }
 
 function CloseButton({ onPress, k }: { onPress: () => void; k: (n: number) => number }) {
+  const ins = useSafeAreaInsets();
+  const { safe, mode } = useLayout();
+  const size = mode === 'tv' ? k(34) : 44;
   return (
-    <Pressable focusable={false} onPress={onPress} hitSlop={10} style={{ position: 'absolute', top: k(14), left: k(14), width: k(34), height: k(34), borderRadius: k(17), backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' }}>
-      <Icon name="arrow-left" size={k(18)} color="#fff" />
+    <Pressable
+      focusable={false}
+      onPress={onPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      style={{ position: 'absolute', top: k(14) + Math.max(ins.top, safe.y), left: k(14) + Math.max(ins.left, safe.x), width: size, height: size, borderRadius: radius.pill, backgroundColor: colors.videoScrim, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}
+    >
+      <Icon name="arrow-left" size={k(18)} color={colors.onVideo} />
     </Pressable>
   );
 }

@@ -3,9 +3,9 @@ import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Image } from 'expo-image';
 import { imageUrl } from '../services/http';
 import { hashString, initials } from '../utils/format';
-import { colors } from '../theme';
+import { colors, monogram, radius } from '../theme';
 
-const PALETTE = ['#2B3A55', '#3A2B55', '#2B5548', '#55442B', '#552B3A', '#2B4A55', '#44552B', '#4B2B55'];
+const PALETTE = monogram;
 
 /** Channel logo with a generated monogram fallback when there's no (or a broken) image. */
 export const Logo = memo(function Logo({
@@ -56,7 +56,7 @@ export const Poster = memo(function Poster({ uri, name, width, style }: { uri?: 
   const height = width * 1.5;
   if (!uri || failed) {
     return (
-      <View style={[{ width, height, borderRadius: 8, backgroundColor: c1, padding: width * 0.08, justifyContent: 'flex-end', overflow: 'hidden' }, style]}>
+      <View style={[{ width, height, borderRadius: radius.md, backgroundColor: c1, padding: width * 0.08, justifyContent: 'flex-end', overflow: 'hidden' }, style]}>
         <View style={{ position: 'absolute', top: -width * 0.3, right: -width * 0.3, width: width * 0.9, height: width * 0.9, borderRadius: width, backgroundColor: 'rgba(255,255,255,0.06)' }} />
         <Text numberOfLines={4} style={{ color: colors.text, fontWeight: '800', fontSize: Math.max(11, width * 0.11), lineHeight: Math.max(13, width * 0.13) }}>
           {name}
@@ -65,7 +65,7 @@ export const Poster = memo(function Poster({ uri, name, width, style }: { uri?: 
     );
   }
   return (
-    <View style={[{ width, height, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.surface2 }, style]}>
+    <View style={[{ width, height, borderRadius: radius.md, overflow: 'hidden', backgroundColor: colors.surface2 }, style]}>
       <Image
         source={{ uri: imageUrl(uri) }}
         style={{ width: '100%', height: '100%' }}

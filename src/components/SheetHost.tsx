@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUI } from '../store/ui';
 import { Layer, useKeys } from '../input/keys';
-import { colors, useLayout } from '../theme';
+import { colors, radius, useLayout } from '../theme';
 import { Focusable } from './Focusable';
 import { Icon } from './Icon';
 
@@ -10,7 +11,8 @@ import { Icon } from './Icon';
 export function SheetHost() {
   const sheet = useUI((s) => s.sheet);
   const close = useUI((s) => s.closeSheet);
-  const { s, mode } = useLayout();
+  const { s, mode, type } = useLayout();
+  const insets = useSafeAreaInsets();
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
@@ -36,19 +38,33 @@ export function SheetHost() {
   if (!sheet) return null;
   const tv = mode === 'tv';
   const panel = tv
-    ? { position: 'absolute' as const, right: 0, top: 0, bottom: 0, width: s(300), paddingTop: s(28) }
-    : { position: 'absolute' as const, left: 0, right: 0, bottom: 0, maxHeight: '75%' as const, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 16, paddingBottom: 28 };
+    ? { position: 'absolute' as const, right: 0, top: 0, bottom: 0, width: s(320), paddingTop: s(32), paddingBottom: s(16) }
+    : {
+        position: 'absolute' as const,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        maxHeight: '80%' as const,
+        borderTopLeftRadius: radius.xl,
+        borderTopRightRadius: radius.xl,
+        paddingTop: 8,
+        paddingBottom: Math.max(insets.bottom, 16),
+        alignSelf: 'center' as const,
+        maxWidth: 560,
+        marginHorizontal: 'auto' as const,
+      };
 
   return (
     <View style={StyleSheet.absoluteFill}>
       <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: colors.scrim }]} onPress={close} focusable={false} />
-      <Animated.View style={[panel, { backgroundColor: colors.bgElevated, borderLeftWidth: tv ? 1 : 0, borderColor: colors.border }]}>
-        <View style={{ paddingHorizontal: tv ? s(20) : 20, marginBottom: tv ? s(10) : 10 }}>
-          <Text numberOfLines={2} style={{ color: colors.text, fontSize: tv ? s(17) : 18, fontWeight: '700' }}>
+      <Animated.View style={[panel, { backgroundColor: colors.bgElevated, borderLeftWidth: tv ? 1 : 0, borderTopWidth: tv ? 0 : 1, borderColor: colors.border }]}>
+        {!tv ? <View style={{ alignSelf: 'center', width: 36, height: 5, borderRadius: 3, backgroundColor: colors.borderStrong, marginBottom: 14 }} /> : null}
+        <View style={{ paddingHorizontal: tv ? s(22) : 20, marginBottom: tv ? s(12) : 10 }}>
+          <Text numberOfLines={2} style={[type('heading'), { color: colors.text }]}>
             {sheet.title}
           </Text>
           {sheet.subtitle ? (
-            <Text numberOfLines={4} style={{ color: colors.textDim, fontSize: tv ? s(11.5) : 13, marginTop: 4, lineHeight: tv ? s(16) : 18 }}>
+            <Text numberOfLines={tv ? 6 : 4} style={[type('caption'), { color: colors.textDim, marginTop: tv ? s(4) : 4, lineHeight: tv ? s(16) : 18 }]}>
               {sheet.subtitle}
             </Text>
           ) : null}
@@ -66,9 +82,10 @@ export function SheetHost() {
                 flexDirection: 'row',
                 alignItems: 'center',
                 paddingHorizontal: tv ? s(12) : 12,
-                paddingVertical: tv ? s(9) : 13,
-                borderRadius: tv ? s(8) : 10,
-                marginBottom: 2,
+                paddingVertical: tv ? s(9) : 0,
+                minHeight: tv ? s(40) : 52,
+                borderRadius: tv ? s(radius.md) : radius.md,
+                marginBottom: tv ? s(2) : 2,
               }}
               focusStyle={{ backgroundColor: colors.focus }}
             >
@@ -78,11 +95,11 @@ export function SheetHost() {
                     <Icon name={o.icon} size={tv ? s(17) : 20} color={focused ? colors.focusText : o.destructive ? colors.live : colors.textDim} style={{ marginRight: tv ? s(12) : 14 }} />
                   ) : null}
                   <View style={{ flex: 1 }}>
-                    <Text numberOfLines={1} style={{ color: focused ? colors.focusText : o.destructive ? colors.live : colors.text, fontSize: tv ? s(13) : 15, fontWeight: '600' }}>
+                    <Text numberOfLines={1} style={[type('body'), { fontWeight: '600', color: focused ? colors.focusText : o.destructive ? colors.live : colors.text }]}>
                       {o.label}
                     </Text>
                     {o.detail ? (
-                      <Text numberOfLines={1} style={{ color: focused ? '#394253' : colors.muted, fontSize: tv ? s(10.5) : 12, marginTop: 2 }}>
+                      <Text numberOfLines={1} style={[type('caption'), { color: focused ? colors.focusDim : colors.muted, marginTop: 1 }]}>
                         {o.detail}
                       </Text>
                     ) : null}
@@ -100,7 +117,8 @@ export function SheetHost() {
 
 export function Toast() {
   const toast = useUI((s) => s.toast);
-  const { s, mode } = useLayout();
+  const { s, mode, type } = useLayout();
+  const insets = useSafeAreaInsets();
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     if (!toast) return;
@@ -111,9 +129,9 @@ export function Toast() {
   if (!toast || !visible) return null;
   const tv = mode === 'tv';
   return (
-    <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: tv ? s(28) : 90, alignItems: 'center' }}>
-      <View style={{ backgroundColor: colors.surface3, paddingHorizontal: tv ? s(16) : 16, paddingVertical: tv ? s(9) : 10, borderRadius: 999, borderWidth: 1, borderColor: colors.border }}>
-        <Text style={{ color: colors.text, fontSize: tv ? s(12.5) : 14, fontWeight: '600' }}>{toast.text}</Text>
+    <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: tv ? s(32) : 76 + insets.bottom, alignItems: 'center', paddingHorizontal: 16 }}>
+      <View style={{ backgroundColor: colors.surface3, paddingHorizontal: tv ? s(18) : 18, paddingVertical: tv ? s(10) : 11, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderStrong }}>
+        <Text style={[type('label'), { color: colors.text }]}>{toast.text}</Text>
       </View>
     </View>
   );

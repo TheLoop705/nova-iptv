@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, BackHandler, Platform, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { colors, useLayout } from '../theme';
+import { colors, radius, useLayout } from '../theme';
 import { useUI, type Screen } from '../store/ui';
 import { useLibrary } from '../store/library';
 import { useActivePlaylist } from '../store/settings';
@@ -12,6 +11,7 @@ import { openSearch } from '../store/actions';
 import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
+import { NovaMark } from '../components/NovaMark';
 import { GuideScreen } from './GuideScreen';
 import { VodScreen } from './VodScreen';
 import { SearchScreen } from './SearchScreen';
@@ -26,7 +26,7 @@ const NAV: { id: Screen; label: string; icon: string }[] = [
 ];
 
 export function Shell() {
-  const { s, mode } = useLayout();
+  const { s, mode, safe, type } = useLayout();
   const tv = mode === 'tv';
   const insets = useSafeAreaInsets();
   const screen = useUI((st) => st.screen);
@@ -95,15 +95,29 @@ export function Shell() {
 
   if (!tv) {
     return (
-      <View style={{ flex: 1, paddingTop: insets.top }}>
+      <View style={{ flex: 1, paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}>
         <View style={{ flex: 1 }}>{content}</View>
-        <View style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, paddingBottom: Math.max(insets.bottom, 6), paddingTop: 6 }}>
+        <View
+          accessibilityRole="tablist"
+          style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, paddingBottom: Math.max(insets.bottom, 8), paddingTop: 6 }}
+        >
           {NAV.map((n) => {
             const on = n.id === screen;
             return (
-              <Pressable key={n.id} focusable={false} onPress={() => setScreen(n.id)} style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }} testID={`tab-${n.id}`}>
-                <Icon name={n.icon} size={22} color={on ? colors.accent : colors.muted} />
-                <Text style={{ color: on ? colors.text : colors.muted, fontSize: 10.5, fontWeight: '600', marginTop: 2 }}>{n.label}</Text>
+              <Pressable
+                key={n.id}
+                focusable={false}
+                onPress={() => setScreen(n.id)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={n.label}
+                style={{ flex: 1, alignItems: 'center', minHeight: 48, justifyContent: 'center' }}
+                testID={`tab-${n.id}`}
+              >
+                <View style={{ width: 56, height: 30, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: on ? colors.accentSoft : 'transparent' }}>
+                  <Icon name={n.icon} size={22} color={on ? colors.accent : colors.muted} />
+                </View>
+                <Text style={[type('caption'), { fontSize: 11, lineHeight: 14, fontWeight: on ? '700' : '600', color: on ? colors.text : colors.muted, marginTop: 2 }]}>{n.label}</Text>
               </Pressable>
             );
           })}
@@ -112,19 +126,31 @@ export function Shell() {
     );
   }
 
-  const railW = s(62);
+  const railW = s(64);
+  const openW = s(220);
   return (
     <View style={{ flex: 1, flexDirection: 'row' }}>
       <View style={{ width: railW }} />
-      <View style={{ flex: 1 }}>{content}</View>
+      <View style={{ flex: 1, paddingTop: safe.y, paddingBottom: safe.y, paddingRight: safe.x }}>{content}</View>
+      {menuFocused ? <Pressable focusable={false} onPress={() => setMenuFocused(false)} style={{ position: 'absolute', left: openW, right: 0, top: 0, bottom: 0, backgroundColor: colors.scrim }} /> : null}
       {/* rail sits on top so it can expand over the content when focused */}
-      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: menuFocused ? s(210) : railW, backgroundColor: colors.bgElevated, borderRightWidth: 1, borderColor: colors.border, paddingTop: s(18), paddingHorizontal: s(8) }}>
-        {menuFocused ? <LinearGradient colors={['rgba(76,141,255,0.10)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: s(160) }} /> : null}
-        <View style={{ alignItems: menuFocused ? 'flex-start' : 'center', marginBottom: s(18), paddingLeft: menuFocused ? s(10) : 0, flexDirection: 'row' }}>
-          <View style={{ width: s(30), height: s(30), borderRadius: s(9), backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="television-classic" size={s(17)} color="#fff" />
-          </View>
-          {menuFocused ? <Text style={{ color: colors.text, fontSize: s(17), fontWeight: '900', marginLeft: s(10), alignSelf: 'center' }}>Nova</Text> : null}
+      <View
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: menuFocused ? openW : railW,
+          backgroundColor: colors.bgElevated,
+          borderRightWidth: 1,
+          borderColor: menuFocused ? colors.borderStrong : colors.border,
+          paddingTop: s(18) + safe.y,
+          paddingHorizontal: s(10),
+        }}
+      >
+        <View style={{ alignItems: 'center', marginBottom: s(22), paddingLeft: menuFocused ? s(6) : 0, flexDirection: 'row', justifyContent: menuFocused ? 'flex-start' : 'center' }}>
+          <NovaMark size={s(32)} />
+          {menuFocused ? <Text style={[type('heading'), { color: colors.text, fontWeight: '800', marginLeft: s(10), letterSpacing: -0.2 }]}>Nova</Text> : null}
         </View>
         {NAV.map((n, i) => {
           const on = n.id === screen;
@@ -132,22 +158,36 @@ export function Shell() {
             <Focusable
               key={n.id}
               focused={menuFocused && i === railIndex}
-              onPress={() => setScreen(n.id)}
+              onPress={() => (n.id === 'search' ? openSearch() : setScreen(n.id))}
               testID={`nav-${n.id}`}
-              style={{ height: s(40), borderRadius: s(9), flexDirection: 'row', alignItems: 'center', justifyContent: menuFocused ? 'flex-start' : 'center', paddingHorizontal: menuFocused ? s(12) : 0, marginBottom: s(4), backgroundColor: on && !menuFocused ? colors.accentSoft : 'transparent' }}
-              focusStyle={{ backgroundColor: colors.focus }}
+              accessibilityLabel={n.label}
+              style={{
+                height: s(40),
+                borderRadius: s(radius.md),
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: menuFocused ? 'flex-start' : 'center',
+                paddingHorizontal: menuFocused ? s(12) : 0,
+                marginBottom: s(4),
+                backgroundColor: on ? colors.accentSoft : 'transparent',
+              }}
+              focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.03 }] }}
             >
               {({ focused }) => (
                 <>
+                  {on && !focused ? <View style={{ position: 'absolute', left: -s(10), top: s(10), bottom: s(10), width: s(3), borderRadius: s(2), backgroundColor: colors.accent }} /> : null}
                   <Icon name={n.icon} size={s(19)} color={focused ? colors.focusText : on ? colors.accent : colors.textDim} />
                   {menuFocused ? (
-                    <Text style={{ marginLeft: s(12), color: focused ? colors.focusText : on ? colors.accent : colors.text, fontSize: s(13), fontWeight: '700' }}>{n.label}</Text>
+                    <Text style={[type('label'), { fontSize: s(13.5), marginLeft: s(12), color: focused ? colors.focusText : on ? colors.text : colors.textDim }]}>{n.label}</Text>
                   ) : null}
                 </>
               )}
             </Focusable>
           );
         })}
+        {menuFocused ? (
+          <Text style={[type('caption'), { position: 'absolute', left: s(16), right: s(12), bottom: s(14) + safe.y, color: colors.muted }]}>Back to exit · → to return</Text>
+        ) : null}
       </View>
     </View>
   );
@@ -173,22 +213,20 @@ function Content({ screen }: { screen: Screen }) {
 }
 
 function Loading() {
-  const { s, mode } = useLayout();
+  const { k, type } = useLayout();
   const message = useLibrary((st) => st.message);
   const playlist = useActivePlaylist();
-  const k = mode === 'tv' ? s : (n: number) => n;
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
       <ActivityIndicator size="large" color={colors.accent} />
-      <Text style={{ color: colors.text, fontSize: k(15), fontWeight: '700', marginTop: k(14) }}>{playlist?.name}</Text>
-      <Text style={{ color: colors.textDim, fontSize: k(12), marginTop: k(4) }}>{message ?? 'Loading…'}</Text>
+      <Text style={[type('heading'), { color: colors.text, marginTop: k(16) }]}>{playlist?.name}</Text>
+      <Text style={[type('caption'), { color: colors.textDim, marginTop: k(4) }]}>{message ?? 'Loading…'}</Text>
     </View>
   );
 }
 
 function LoadError() {
-  const { s, mode } = useLayout();
-  const k = mode === 'tv' ? s : (n: number) => n * 1.1;
+  const { k, type } = useLayout();
   const error = useLibrary((st) => st.error);
   const playlist = useActivePlaylist();
   const openEditor = useUI((st) => st.openEditor);
@@ -212,8 +250,8 @@ function LoadError() {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <Icon name="alert-circle-outline" size={k(40)} color={colors.live} />
-      <Text style={{ color: colors.text, fontSize: k(17), fontWeight: '800', marginTop: k(12) }}>Couldn't load “{playlist?.name}”</Text>
-      <Text style={{ color: colors.textDim, fontSize: k(12.5), marginTop: k(6), textAlign: 'center', maxWidth: k(520) }}>{error}</Text>
+      <Text style={[type('heading'), { color: colors.text, marginTop: k(12), textAlign: 'center' }]}>Couldn't load “{playlist?.name}”</Text>
+      <Text style={[type('body'), { color: colors.textDim, marginTop: k(6), textAlign: 'center', maxWidth: k(520) }]}>{error}</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: k(10), marginTop: k(20) }}>
         <Button label="Retry" icon="refresh" primary focused={btn === 0} onPress={actions[0]} />
         <Button label="Edit playlist" icon="pencil-outline" focused={btn === 1} onPress={actions[1]} />

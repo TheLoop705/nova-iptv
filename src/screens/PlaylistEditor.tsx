@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, useLayout } from '../theme';
 import { useUI } from '../store/ui';
 import { useSettings } from '../store/settings';
@@ -36,6 +37,7 @@ interface Form {
 
 export function PlaylistEditor() {
   const { s, mode } = useLayout();
+  const insets = useSafeAreaInsets();
   const tv = mode === 'tv';
   const k = tv ? s : (n: number) => n * 1.1;
   const editing = useUI((st) => st.editor?.playlist);
@@ -175,8 +177,8 @@ export function PlaylistEditor() {
 
   return (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]}>
-      <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: tv ? s(32) : 20, paddingTop: tv ? s(28) : 60, maxWidth: tv ? s(620) : undefined, width: '100%', alignSelf: 'center' }}>
-        <Text style={{ color: colors.text, fontSize: k(22), fontWeight: '800' }}>{editing ? 'Edit playlist' : 'Add playlist'}</Text>
+      <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: tv ? s(32) : 20, paddingTop: tv ? s(28) : 24 + insets.top, paddingBottom: tv ? s(32) : 24 + insets.bottom, maxWidth: tv ? s(620) : 560, width: '100%', alignSelf: 'center' }}>
+        <Text style={{ color: colors.text, fontSize: k(24), fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular }}>{editing ? 'Edit playlist' : 'Add playlist'}</Text>
         <Text style={{ color: colors.muted, fontSize: k(12), marginTop: k(4), marginBottom: k(16) }}>
           Nova doesn't provide any channels — add the M3U link or Xtream Codes login from your IPTV provider.
         </Text>

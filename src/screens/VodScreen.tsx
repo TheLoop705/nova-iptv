@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, ScrollView, Text, View } from 'react-native';
 import type { SeriesItem, VodItem } from '../types';
-import { colors, useLayout } from '../theme';
+import { colors, fonts, radius, useLayout } from '../theme';
+import { Chip } from '../components/Chip';
 import { useLibrary } from '../store/library';
 import { useSettings } from '../store/settings';
 import { useUI } from '../store/ui';
@@ -86,7 +87,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   const gridW = boxW - catsW - pad * 2;
   const cols = tv ? Math.max(3, Math.floor((gridW + gap) / (s(98) + gap))) : Math.max(3, Math.floor((gridW + gap) / (118 + gap)));
   const posterW = (gridW - gap * (cols - 1)) / cols;
-  const rowH = posterW * 1.5 + (tv ? s(40) : 44);
+  const rowH = posterW * 1.5 + (tv ? s(46) : 50);
   const rows = useMemo(() => {
     const out: Item[][] = [];
     for (let i = 0; i < items.length; i += cols) out.push(items.slice(i, i + cols));
@@ -160,8 +161,8 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   return (
     <View style={{ flex: 1 }} onLayout={(e) => setBoxW(e.nativeEvent.layout.width)}>
       <View style={{ flexDirection: 'row', alignItems: 'baseline', paddingHorizontal: pad, paddingTop: tv ? s(16) : 14, paddingBottom: tv ? s(8) : 6 }}>
-        <Text style={{ color: colors.text, fontSize: tv ? s(22) : 24, fontWeight: '800' }}>{title}</Text>
-        <Text style={{ color: colors.muted, fontSize: tv ? s(12) : 13, marginLeft: 10 }}>
+        <Text style={{ color: colors.text, fontSize: tv ? s(22) : 28, fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular }}>{title}</Text>
+        <Text numberOfLines={1} style={{ color: colors.muted, fontSize: tv ? s(12) : 13, marginLeft: 10, flexShrink: 1 }}>
           {selected ? allCats.find((c) => c.id === selected)?.name : ''}
           {items.length ? `  ·  ${items.length}` : ''}
         </Text>
@@ -183,15 +184,15 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
                   setSelected(c.id);
                   setGi(0);
                 }}
-                style={{ height: catH - s(2), borderRadius: s(6), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center' }}
+                style={{ height: catH - s(2), borderRadius: s(radius.sm), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center', backgroundColor: c.id === selected ? colors.accentSoft : 'transparent' }}
                 focusStyle={{ backgroundColor: colors.focus }}
               >
                 {({ focused }) => (
                   <>
                     {c.id === RECENT || c.id === FAVS ? (
-                      <Icon name={c.id === RECENT ? 'history' : 'star'} size={s(13)} color={focused ? colors.focusText : colors.warning} style={{ marginRight: s(7) }} />
+                      <Icon name={c.id === RECENT ? 'history' : 'star'} size={s(13)} color={focused ? colors.focusText : c.id === RECENT ? colors.accent : colors.star} style={{ marginRight: s(7) }} />
                     ) : null}
-                    <Text numberOfLines={1} style={{ flex: 1, color: focused ? colors.focusText : c.id === selected ? colors.accent : colors.text, fontSize: s(12), fontWeight: c.id === selected ? '700' : '500' }}>
+                    <Text numberOfLines={1} style={{ flex: 1, color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }}>
                       {c.name}
                     </Text>
                   </>
@@ -202,17 +203,16 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
         ) : (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 8 }}>
             {allCats.map((c) => (
-              <Pressable
+              <Chip
                 key={c.id}
-                focusable={false}
+                label={c.name}
+                icon={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : undefined}
+                selected={c.id === selected}
                 onPress={() => {
                   setSelected(c.id);
                   setGi(0);
                 }}
-                style={{ paddingHorizontal: 14, height: 32, borderRadius: 16, justifyContent: 'center', backgroundColor: c.id === selected ? colors.focus : colors.surface2 }}
-              >
-                <Text style={{ color: c.id === selected ? colors.focusText : colors.text, fontWeight: '600', fontSize: 13 }}>{c.name}</Text>
-              </Pressable>
+              />
             ))}
           </ScrollView>
         )}
@@ -292,29 +292,31 @@ const PosterCard = React.memo(function PosterCard({
     <Focusable
       focused={focused}
       onPress={onPress}
-      style={{ width, borderRadius: 10, padding: 0 }}
-      focusStyle={{ transform: [{ scale: 1.06 }] }}
+      accessibilityLabel={item.name}
+      style={{ width, borderRadius: radius.md, padding: 0 }}
+      hoverStyle={{ transform: [{ scale: 1.03 }] }}
+      focusStyle={{ transform: [{ scale: 1.07 }] }}
     >
-      {({ focused: f }) => (
+      {({ focused: f, hovered }) => (
         <View>
-          <View style={{ borderRadius: 10, borderWidth: tv ? s(2) : 2, borderColor: f ? colors.focus : 'transparent', overflow: 'hidden' }}>
-            <Poster uri={item.poster} name={item.name} width={width - (tv ? s(4) : 4)} />
+          <View style={{ borderRadius: tv ? s(radius.md) : radius.md, borderWidth: tv ? s(2.5) : 2, borderColor: f ? colors.focus : hovered ? colors.borderStrong : 'transparent', overflow: 'hidden' }}>
+            <Poster uri={item.poster} name={item.name} width={width - (tv ? s(5) : 4)} />
             {item.rating && Number(item.rating) > 0 ? (
-              <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, flexDirection: 'row', alignItems: 'center' }}>
-                <Icon name="star" size={tv ? s(9) : 10} color={colors.warning} />
-                <Text style={{ color: '#fff', fontSize: tv ? s(9) : 10, fontWeight: '700', marginLeft: 2 }}>{Number(item.rating).toFixed(1)}</Text>
+              <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: colors.videoScrim, borderRadius: radius.xs, paddingHorizontal: 5, paddingVertical: 1, flexDirection: 'row', alignItems: 'center' }}>
+                <Icon name="star" size={tv ? s(10) : 11} color={colors.star} />
+                <Text style={{ color: colors.onVideo, fontSize: tv ? s(10.5) : 11, fontWeight: '700', marginLeft: 2, fontVariant: ['tabular-nums'] }}>{Number(item.rating).toFixed(1)}</Text>
               </View>
             ) : null}
             {progress > 0 ? (
-              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 4, backgroundColor: 'rgba(0,0,0,0.6)' }}>
+              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: tv ? s(3) : 4, backgroundColor: colors.videoScrim }}>
                 <View style={{ width: `${Math.min(100, progress * 100)}%`, height: '100%', backgroundColor: colors.accent }} />
               </View>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={{ color: f ? colors.text : colors.textDim, fontSize: tv ? s(11) : 12.5, fontWeight: '600', marginTop: tv ? s(5) : 6 }}>
+          <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600', marginTop: tv ? s(6) : 6 }}>
             {item.name}
           </Text>
-          {year ? <Text style={{ color: colors.muted, fontSize: tv ? s(9.5) : 11 }}>{year}</Text> : null}
+          {year ? <Text style={{ color: colors.muted, fontSize: tv ? s(11) : 12 }}>{year}</Text> : null}
         </View>
       )}
     </Focusable>
