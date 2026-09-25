@@ -3,10 +3,32 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.16",
+    "@expo/vector-icons": "^15.0.2",
     "expo": "~57.0.25",
+    "expo-build-properties": "~57.0.22",
+    "expo-document-picker": "~57.0.2",
+    "expo-file-system": "~57.0.7",
+    "expo-font": "~57.0.4",
+    "expo-image": "~57.0.5",
+    "expo-keep-awake": "~57.0.2",
+    "expo-linear-gradient": "~57.0.2",
+    "expo-modules-core": "~57.0.19",
+    "expo-screen-orientation": "~57.0.2",
+    "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.4",
+    "expo-video": "~57.0.5",
+    "hls.js": "^1.7.3",
+    "idb-keyval": "^6.3.0",
+    "mpegts.js": "^1.8.2",
+    "pako": "^3.0.2",
     "react": "19.2.3",
-    "react-native": "0.86.3"
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-web": "^0.21.2",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
@@ -14,9 +36,14 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "EXPO_PUBLIC_PROXY_URL=http://localhost:8787 expo start --web",
+    "proxy": "node server/index.mjs",
+    "mock:xtream": "node server/mock-xtream.mjs",
+    "build:web": "expo export -p web",
+    "serve": "node server/index.mjs",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit"
   },
   "private": true
 }

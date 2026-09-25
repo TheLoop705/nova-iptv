@@ -1,0 +1,619 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { usePlayer } from '../store/player';
+import { useLibrary, useAllGroups, ALL } from '../store/library';
+import { useSettings } from '../store/settings';
+import { useUI } from '../store/ui';
+import { Layer, useKeys, type KeyEvt } from '../input/keys';
+import { colors, useLayout } from '../theme';
+import { usePlayback, type Fit } from './playback';
+import { nextProgram, programAt } from '../services/epg';
+import { canCatchup } from '../services/catchup';
+import { formatClock, formatDuration, formatRange } from '../utils/format';
+import { useNow } from '../utils/hooks';
+import { Icon } from '../components/Icon';
+import { Logo } from '../components/Logo';
+import { Focusable } from '../components/Focusable';
+import type { Channel } from '../types';
+
+interface Control {
+  id: string;
+  icon: string;
+  label: string;
+  active?: boolean;
+}
+
+const FIT_LABEL: Record<Fit, string> = { contain: 'Fit', cover: 'Zoom', fill: 'Stretch' };
+const FIT_NEXT: Record<Fit, Fit> = { contain: 'cover', cover: 'fill', fill: 'contain' };
+
+export function PlayerOverlay() {
+  const { s, mode } = useLayout();
+  const tv = mode === 'tv';
+  const k = tv ? s : (n: number) => n * 1.1;
+
+  const item = usePlayer((st) => st.item)!;
+  const groupId = usePlayer((st) => st.groupId);
+  const playChannel = usePlayer((st) => st.playChannel);
+  const playCatchup = usePlayer((st) => st.playCatchup);
+  const setFullscreen = usePlayer((st) => st.setFullscreen);
+  const stop = usePlayer((st) => st.stop);
+  const retry = usePlayer((st) => st.retry);
+  const recall = usePlayer((st) => st.recall);
+
+  const byId = useLibrary((st) => st.byId);
+  const epg = useLibrary((st) => st.epg);
+  const pid = useLibrary((st) => st.playlistId);
+  const groups = useAllGroups();
+  const prefs = useSettings((st) => st.prefs);
+  const favorites = useSettings((st) => (pid ? st.favorites[pid] : undefined));
+  const toggleFavorite = useSettings((st) => st.toggleFavorite);
+  const saveVodProgress = useSettings((st) => st.saveVodProgress);
+  const openSheet = useUI((st) => st.openSheet);
+  const showToast = useUI((st) => st.showToast);
+  const sheetOpen = useUI((st) => !!st.sheet);
+
+  const status = usePlayback((st) => st.status);
+  const error = usePlayback((st) => st.error);
+  const position = usePlayback((st) => st.position);
+  const duration = usePlayback((st) => st.duration);
+  const audioTracks = usePlayback((st) => st.audioTracks);
+  const subtitleTracks = usePlayback((st) => st.subtitleTracks);
+  const fit = usePlayback((st) => st.fit);
+  const cmd = usePlayback((st) => st.cmd);
+
+  const now = useNow(5000);
+  const live = item.kind === 'live';
+  const ch: Channel | undefined = item.kind !== 'vod' ? byId[item.channelId] : undefined;
+  const programs = ch ? epg[ch.id] : undefined;
+  const program = item.kind === 'catchup' ? item.program : ch ? programAt(programs, now) : undefined;
+  const next = program ? nextProgram(programs, program.end - 1) : undefined;
+  const isFav = !!ch && !!favorites?.includes(ch.id);
+
+  const [visible, setVisible] = useState(true);
+  const [row, setRow] = useState<'seek' | 'controls'>(live ? 'controls' : 'seek');
+  const [ctrl, setCtrl] = useState(0);
+  const [listOpen, setListOpen] = useState(false);
+  const [digits, setDigits] = useState('');
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const digitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const poke = useCallback(() => {
+    setVisible(true);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      const st = usePlayback.getState().status;
+      if (st === 'playing') setVisible(false);
+    }, 5000);
+  }, []);
+
+  useEffect(() => {
+    poke();
+    setRow(live ? 'controls' : 'seek');
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item]);
+
+  useEffect(() => {
+    if (status === 'playing') poke();
+    else if (status === 'paused' || status === 'error') setVisible(true);
+  }, [status, poke]);
+
+  // VOD resume points
+  const posRef = useRef({ position, duration });
+  posRef.current = { position, duration };
+  useEffect(() => {
+    if (item.kind !== 'vod') return;
+    const t = setInterval(() => {
+      const { position: p, duration: d } = posRef.current;
+      if (p > 0 && d > 0) saveVodProgress(item.key, p, d);
+    }, 10000);
+    return () => clearInterval(t);
+  }, [item, saveVodProgress]);
+
+  useEffect(() => {
+    if (status === 'ended' && item.kind !== 'live') {
+      if (item.kind === 'vod') saveVodProgress(item.key, duration, duration);
+      stop();
+    }
+  }, [status, item, duration, saveVodProgress, stop]);
+
+  const exit = useCallback(() => {
+    if (item.kind === 'vod') {
+      const { position: p, duration: d } = posRef.current;
+      if (p > 0) saveVodProgress(item.key, p, d);
+      stop();
+    } else if (item.kind === 'catchup') {
+      stop();
+    } else {
+      setFullscreen(false);
+    }
+  }, [item, saveVodProgress, stop, setFullscreen]);
+
+  const zapList = useMemo(() => {
+    const g = groups.find((x) => x.id === groupId) ?? groups.find((x) => x.id === ALL);
+    return g?.channelIds ?? [];
+  }, [groups, groupId]);
+
+  const zap = (delta: number) => {
+    if (!ch || !zapList.length) return;
+    const i = zapList.indexOf(ch.id);
+    const n = zapList.length;
+    const nextId = zapList[(((i < 0 ? 0 : i) + delta) % n + n) % n];
+    playChannel(nextId);
+    poke();
+  };
+
+  const controls: Control[] = useMemo(() => {
+    const list: Control[] = [];
+    if (live) {
+      list.push({ id: 'list', icon: 'format-list-bulleted', label: 'Channels' });
+      list.push({ id: 'guide', icon: 'view-dashboard-outline', label: 'Guide' });
+      list.push({ id: 'fav', icon: isFav ? 'star' : 'star-outline', label: isFav ? 'Favorited' : 'Favorite', active: isFav });
+      if (ch && program && canCatchup(ch, program, now)) list.push({ id: 'restart', icon: 'restart', label: 'Restart' });
+    } else {
+      list.push({ id: 'playpause', icon: status === 'paused' ? 'play' : 'pause', label: status === 'paused' ? 'Play' : 'Pause' });
+      list.push({ id: 'rw', icon: 'rewind-10', label: '-10s' });
+      list.push({ id: 'ff', icon: 'fast-forward-10', label: '+10s' });
+      if (item.kind === 'catchup') list.push({ id: 'golive', icon: 'broadcast', label: 'Live' });
+    }
+    if (audioTracks.length > 1) list.push({ id: 'audio', icon: 'volume-high', label: 'Audio' });
+    if (subtitleTracks.length) list.push({ id: 'subs', icon: 'subtitles-outline', label: 'Subtitles' });
+    list.push({ id: 'fit', icon: 'aspect-ratio', label: FIT_LABEL[fit] });
+    return list;
+  }, [live, isFav, ch, program, now, status, item.kind, audioTracks.length, subtitleTracks.length, fit]);
+
+  useEffect(() => {
+    if (ctrl >= controls.length) setCtrl(controls.length - 1);
+  }, [controls.length, ctrl]);
+
+  const togglePlay = () => (usePlayback.getState().status === 'playing' ? cmd.pause() : cmd.play());
+
+  const audioSheet = () =>
+    openSheet({
+      title: 'Audio track',
+      options: audioTracks.map((t, i) => ({ label: t.label, selected: i === usePlayback.getState().audioIndex, onSelect: () => cmd.setAudio(i) })),
+    });
+  const subsSheet = () =>
+    openSheet({
+      title: 'Subtitles',
+      options: [
+        { label: 'Off', selected: usePlayback.getState().subtitleIndex < 0, onSelect: () => cmd.setSubtitle(-1) },
+        ...subtitleTracks.map((t, i) => ({ label: t.label, selected: i === usePlayback.getState().subtitleIndex, onSelect: () => cmd.setSubtitle(i) })),
+      ],
+    });
+  const fitSheet = () =>
+    openSheet({
+      title: 'Aspect ratio',
+      options: (['contain', 'cover', 'fill'] as Fit[]).map((f) => ({
+        label: FIT_LABEL[f],
+        detail: f === 'contain' ? 'Show the whole picture' : f === 'cover' ? 'Fill the screen, crop edges' : 'Stretch to the screen',
+        selected: f === usePlayback.getState().fit,
+        onSelect: () => usePlayback.getState().set({ fit: f }),
+      })),
+    });
+  const optionsSheet = () =>
+    openSheet({
+      title: ch ? ch.name : item.kind === 'vod' ? item.title : 'Options',
+      options: [
+        ...(audioTracks.length > 1 ? [{ label: 'Audio track', icon: 'volume-high', onSelect: audioSheet }] : []),
+        ...(subtitleTracks.length ? [{ label: 'Subtitles', icon: 'subtitles-outline', onSelect: subsSheet }] : []),
+        { label: 'Aspect ratio', icon: 'aspect-ratio', detail: FIT_LABEL[fit], onSelect: fitSheet },
+        ...(ch && pid
+          ? [{ label: isFav ? 'Remove from favorites' : 'Add to favorites', icon: 'star-outline', onSelect: () => toggleFavorite(pid, ch.id) }]
+          : []),
+        { label: 'Reload stream', icon: 'refresh', onSelect: retry },
+      ],
+    });
+
+  const runControl = (id: string) => {
+    poke();
+    switch (id) {
+      case 'list':
+        return setListOpen(true);
+      case 'guide':
+        return setFullscreen(false);
+      case 'fav':
+        if (ch && pid) {
+          toggleFavorite(pid, ch.id);
+          showToast(isFav ? 'Removed from favorites' : 'Added to favorites');
+        }
+        return;
+      case 'restart':
+        return ch && program && playCatchup(ch.id, program);
+      case 'golive':
+        return ch && playChannel(ch.id, { fullscreen: true });
+      case 'playpause':
+        return togglePlay();
+      case 'rw':
+        return cmd.seekBy(-10);
+      case 'ff':
+        return cmd.seekBy(10);
+      case 'audio':
+        return audioSheet();
+      case 'subs':
+        return subsSheet();
+      case 'fit':
+        return usePlayback.getState().set({ fit: FIT_NEXT[fit] });
+    }
+  };
+
+  const onDigit = (d: number) => {
+    if (!digits && d === 0) {
+      recall();
+      return;
+    }
+    const nextDigits = (digits + d).slice(-4);
+    setDigits(nextDigits);
+    if (digitTimer.current) clearTimeout(digitTimer.current);
+    digitTimer.current = setTimeout(() => {
+      setDigits('');
+      const n = Number(nextDigits);
+      const target = useLibrary.getState().channels.find((c) => c.num === n);
+      if (target) playChannel(target.id, { groupId: zapList.includes(target.id) ? groupId : ALL });
+      else showToast(`No channel ${n}`);
+    }, 1300);
+  };
+
+  const onKey = (e: KeyEvt): boolean | void => {
+    if (listOpen) return false; // channel list panel handles its own keys
+    if (e.key === 'digit' && e.digit !== undefined) return live ? onDigit(e.digit) : undefined;
+    if (status === 'error') {
+      if (e.key === 'select') return retry();
+      if (e.key === 'back') return exit();
+      if (live && (e.key === 'up' || e.key === 'chup')) return zap(-1);
+      if (live && (e.key === 'down' || e.key === 'chdown')) return zap(1);
+      return;
+    }
+    if (e.key === 'menu' || (e.key === 'select' && e.long)) return optionsSheet();
+    if (e.key === 'playpause') return togglePlay();
+    if (e.key === 'info') return visible ? setVisible(false) : poke();
+    if (e.key === 'back') return visible && status !== 'paused' ? setVisible(false) : exit();
+
+    if (live) {
+      switch (e.key) {
+        case 'up':
+        case 'chup':
+          return zap(-1);
+        case 'down':
+        case 'chdown':
+          return zap(1);
+        case 'left':
+          if (visible && ctrl > 0) {
+            poke();
+            return setCtrl(ctrl - 1);
+          }
+          return setListOpen(true);
+        case 'right':
+          if (!visible) return poke();
+          poke();
+          return setCtrl(Math.min(controls.length - 1, ctrl + 1));
+        case 'select':
+          if (!visible) return poke();
+          return runControl(controls[ctrl]?.id);
+        default:
+          return;
+      }
+    }
+    // VOD / catch-up
+    const step = e.repeat > 6 ? 60 : e.repeat > 2 ? 30 : 10;
+    switch (e.key) {
+      case 'left':
+      case 'right':
+        if (visible && row === 'controls') {
+          poke();
+          return setCtrl(Math.max(0, Math.min(controls.length - 1, ctrl + (e.key === 'left' ? -1 : 1))));
+        }
+        cmd.seekBy(e.key === 'left' ? -step : step);
+        return poke();
+      case 'rw':
+        cmd.seekBy(-30);
+        return poke();
+      case 'ff':
+        cmd.seekBy(30);
+        return poke();
+      case 'up':
+        setRow('seek');
+        return poke();
+      case 'down':
+        if (visible) setRow('controls');
+        return poke();
+      case 'select':
+        if (visible && row === 'controls') return runControl(controls[ctrl]?.id);
+        togglePlay();
+        return poke();
+      default:
+        return;
+    }
+  };
+
+  useKeys(onKey, !sheetOpen, Layer.player);
+
+  // ---- layout ----
+  const title = item.kind === 'vod' ? item.title : program?.title || ch?.name || '';
+  const subtitle = item.kind === 'vod' ? item.subtitle : ch ? `${ch.num}  ${ch.name}` : '';
+  const liveProgress = live && program ? (now - program.start) / (program.end - program.start) : 0;
+  const seekDuration = duration || (item.kind === 'catchup' ? (item.program.end - item.program.start) / 1000 : 0);
+  const [barW, setBarW] = useState(1);
+
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : poke())} />
+
+      {status === 'loading' ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
+      ) : null}
+
+      {status === 'error' ? (
+        <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)' }]}>
+          <Icon name="television-off" size={k(38)} color={colors.textDim} />
+          <Text style={{ color: colors.text, fontSize: k(17), fontWeight: '700', marginTop: k(10) }}>Can't play this stream</Text>
+          <Text style={{ color: colors.textDim, fontSize: k(12), marginTop: k(6), maxWidth: k(420), textAlign: 'center' }} numberOfLines={3}>
+            {error}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: k(10), marginTop: k(16) }}>
+            <Focusable focused onPress={retry} style={pill(k)} focusStyle={{ backgroundColor: colors.focus }}>
+              {({ focused }) => <Text style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>Retry</Text>}
+            </Focusable>
+            <Pressable focusable={false} onPress={exit} style={pill(k)}>
+              <Text style={{ color: colors.text, fontWeight: '700', fontSize: k(12.5) }}>Back</Text>
+            </Pressable>
+          </View>
+          {live ? <Text style={{ color: colors.muted, fontSize: k(11), marginTop: k(14) }}>Use ▲ ▼ to change channel</Text> : null}
+        </View>
+      ) : null}
+
+      {visible && status !== 'error' && !listOpen ? (
+        <>
+          {/* top bar */}
+          <LinearGradient colors={['rgba(0,0,0,0.75)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: k(90) }} pointerEvents="none" />
+          <View style={{ position: 'absolute', left: k(18), right: k(18), top: k(14), flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable focusable={false} onPress={exit} hitSlop={12} style={{ marginRight: k(10) }}>
+              <Icon name="arrow-left" size={k(22)} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }} />
+            <Text style={{ color: '#fff', fontSize: k(16), fontWeight: '700' }}>{formatClock(now, prefs.clock24)}</Text>
+          </View>
+
+          {/* center transport for touch */}
+          {!tv || item.kind !== 'live' ? (
+            <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: k(40) }]}>
+              {live ? (
+                <>
+                  <RoundBtn icon="chevron-up" k={k} onPress={() => zap(-1)} />
+                  <RoundBtn icon="chevron-down" k={k} onPress={() => zap(1)} />
+                </>
+              ) : (
+                <>
+                  <RoundBtn icon="rewind-10" k={k} onPress={() => (cmd.seekBy(-10), poke())} />
+                  <RoundBtn icon={status === 'paused' ? 'play' : 'pause'} k={k} big onPress={() => (togglePlay(), poke())} />
+                  <RoundBtn icon="fast-forward-10" k={k} onPress={() => (cmd.seekBy(10), poke())} />
+                </>
+              )}
+            </View>
+          ) : null}
+
+          {/* bottom info panel */}
+          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.88)']} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(230) }} pointerEvents="none" />
+          <View style={{ position: 'absolute', left: k(28), right: k(28), bottom: k(22) }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: k(6) }}>
+              {ch ? <Logo uri={ch.logo} name={ch.name} size={k(22)} style={{ marginRight: k(10) }} /> : null}
+              <Text numberOfLines={1} style={{ color: colors.textDim, fontSize: k(12.5), fontWeight: '600', flexShrink: 1 }}>
+                {subtitle}
+              </Text>
+              {live ? <Tag label="LIVE" color={colors.live} k={k} /> : item.kind === 'catchup' ? <Tag label="CATCH-UP" color={colors.accent} k={k} /> : null}
+            </View>
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: k(22), fontWeight: '800' }}>
+              {title}
+            </Text>
+
+            {live ? (
+              <>
+                {program ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(8) }}>
+                    <Text style={{ color: colors.textDim, fontSize: k(11), width: k(44) }}>{formatClock(program.start, prefs.clock24)}</Text>
+                    <View style={{ flex: 1, height: k(4), backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 2 }}>
+                      <View style={{ width: `${Math.min(100, Math.max(0, liveProgress * 100))}%`, height: '100%', backgroundColor: colors.accent, borderRadius: 2 }} />
+                    </View>
+                    <Text style={{ color: colors.textDim, fontSize: k(11), width: k(44), textAlign: 'right' }}>{formatClock(program.end, prefs.clock24)}</Text>
+                  </View>
+                ) : null}
+                {next ? (
+                  <Text numberOfLines={1} style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(6) }}>
+                    Next · {formatRange(next.start, next.end, prefs.clock24)}  {next.title}
+                  </Text>
+                ) : null}
+              </>
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(10) }}>
+                <Text style={{ color: colors.text, fontSize: k(11.5), width: k(58) }}>{formatDuration(position)}</Text>
+                <Pressable
+                  focusable={false}
+                  onLayout={(e) => setBarW(e.nativeEvent.layout.width)}
+                  onPress={(e) => seekDuration && cmd.seekTo((e.nativeEvent.locationX / barW) * seekDuration)}
+                  style={{ flex: 1, height: k(18), justifyContent: 'center' }}
+                >
+                  <View style={{ height: row === 'seek' && visible ? k(6) : k(4), backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3 }}>
+                    <View style={{ width: `${seekDuration ? Math.min(100, (position / seekDuration) * 100) : 0}%`, height: '100%', backgroundColor: colors.accent, borderRadius: 3 }} />
+                  </View>
+                  {row === 'seek' && seekDuration ? (
+                    <View style={{ position: 'absolute', left: Math.max(0, Math.min(barW, (position / seekDuration) * barW)) - k(7), width: k(14), height: k(14), borderRadius: k(7), backgroundColor: '#fff' }} />
+                  ) : null}
+                </Pressable>
+                <Text style={{ color: colors.textDim, fontSize: k(11.5), width: k(58), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
+              </View>
+            )}
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(8), marginTop: k(14) }}>
+              {controls.map((c, i) => (
+                <Focusable
+                  key={c.id}
+                  focused={row === 'controls' && i === ctrl}
+                  onPress={() => {
+                    setCtrl(i);
+                    runControl(c.id);
+                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', height: k(30), paddingHorizontal: k(12), borderRadius: k(15), backgroundColor: 'rgba(255,255,255,0.12)' }}
+                  focusStyle={{ backgroundColor: colors.focus }}
+                >
+                  {({ focused }) => (
+                    <>
+                      <Icon name={c.icon} size={k(15)} color={focused ? colors.focusText : c.active ? colors.warning : '#fff'} />
+                      <Text style={{ color: focused ? colors.focusText : '#fff', fontSize: k(11.5), fontWeight: '700', marginLeft: k(6) }}>{c.label}</Text>
+                    </>
+                  )}
+                </Focusable>
+              ))}
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {status === 'paused' && !visible ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+          <Icon name="pause-circle-outline" size={k(56)} color="rgba(255,255,255,0.85)" />
+        </View>
+      ) : null}
+
+      {digits ? (
+        <View pointerEvents="none" style={{ position: 'absolute', top: k(24), right: k(28), backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: k(10), paddingHorizontal: k(18), paddingVertical: k(8) }}>
+          <Text style={{ color: '#fff', fontSize: k(30), fontWeight: '800', letterSpacing: 2 }}>{digits}</Text>
+        </View>
+      ) : null}
+
+      {listOpen && live ? (
+        <ChannelListPanel
+          channelIds={zapList}
+          currentId={ch?.id}
+          onPick={(id) => {
+            playChannel(id);
+            setListOpen(false);
+            poke();
+          }}
+          onClose={() => setListOpen(false)}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+const pill = (k: (n: number) => number) => ({
+  height: k(34),
+  paddingHorizontal: k(22),
+  borderRadius: k(17),
+  backgroundColor: 'rgba(255,255,255,0.14)',
+  alignItems: 'center' as const,
+  justifyContent: 'center' as const,
+});
+
+function Tag({ label, color, k }: { label: string; color: string; k: (n: number) => number }) {
+  return (
+    <View style={{ backgroundColor: color, borderRadius: k(3), paddingHorizontal: k(5), paddingVertical: k(1), marginLeft: k(10) }}>
+      <Text style={{ color: '#fff', fontSize: k(9), fontWeight: '800', letterSpacing: 0.6 }}>{label}</Text>
+    </View>
+  );
+}
+
+function RoundBtn({ icon, onPress, k, big }: { icon: string; onPress: () => void; k: (n: number) => number; big?: boolean }) {
+  const size = big ? k(64) : k(48);
+  return (
+    <Pressable
+      focusable={false}
+      onPress={onPress}
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <Icon name={icon} size={size * 0.52} color="#fff" />
+    </Pressable>
+  );
+}
+
+/** TiviMate-style mini channel list over the left side of the picture. */
+function ChannelListPanel({ channelIds, currentId, onPick, onClose }: { channelIds: string[]; currentId?: string; onPick: (id: string) => void; onClose: () => void }) {
+  const { s, mode } = useLayout();
+  const k = mode === 'tv' ? s : (n: number) => n * 1.1;
+  const byId = useLibrary((st) => st.byId);
+  const epg = useLibrary((st) => st.epg);
+  const h24 = useSettings((st) => st.prefs.clock24);
+  const now = useNow(30000);
+  const [index, setIndex] = useState(() => Math.max(0, channelIds.indexOf(currentId ?? '')));
+  const ref = useRef<FlatList<string>>(null);
+  const itemH = k(50);
+
+  useEffect(() => {
+    ref.current?.scrollToOffset({ offset: Math.max(0, (index - 3) * itemH), animated: true });
+  }, [index, itemH]);
+
+  useKeys(
+    (e) => {
+      const n = channelIds.length;
+      switch (e.key) {
+        case 'up':
+          return setIndex((i) => Math.max(0, i - 1));
+        case 'down':
+          return setIndex((i) => Math.min(n - 1, i + 1));
+        case 'chup':
+          return setIndex((i) => Math.max(0, i - 8));
+        case 'chdown':
+          return setIndex((i) => Math.min(n - 1, i + 8));
+        case 'select':
+          return onPick(channelIds[index]);
+        case 'back':
+        case 'right':
+        case 'left':
+          return onClose();
+        default:
+          return;
+      }
+    },
+    true,
+    Layer.player + 1
+  );
+
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={onClose} />
+      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: k(340), backgroundColor: 'rgba(8,10,15,0.94)', paddingTop: k(16) }}>
+        <FlatList
+          ref={ref}
+          data={channelIds}
+          keyExtractor={(id) => id}
+          getItemLayout={(_d, i) => ({ length: itemH, offset: itemH * i, index: i })}
+          initialScrollIndex={Math.max(0, index - 3)}
+          renderItem={({ item: id, index: i }) => {
+            const c = byId[id];
+            if (!c) return <View style={{ height: itemH }} />;
+            const p = programAt(epg[id], now);
+            return (
+              <Focusable
+                focused={i === index}
+                alwaysShowFocus
+                onPress={() => onPick(id)}
+                style={{ height: itemH - k(4), marginHorizontal: k(10), marginVertical: k(2), borderRadius: k(8), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10) }}
+                focusStyle={{ backgroundColor: colors.focus }}
+              >
+                {({ focused }) => (
+                  <>
+                    <Text style={{ width: k(32), color: focused ? colors.focusText : colors.muted, fontSize: k(11), fontWeight: '600' }}>{c.num}</Text>
+                    <Logo uri={c.logo} name={c.name} size={k(22)} />
+                    <View style={{ flex: 1, marginLeft: k(10) }}>
+                      <Text numberOfLines={1} style={{ color: focused ? colors.focusText : id === currentId ? colors.accent : colors.text, fontSize: k(12.5), fontWeight: '700' }}>
+                        {c.name}
+                      </Text>
+                      <Text numberOfLines={1} style={{ color: focused ? '#3A4252' : colors.muted, fontSize: k(10.5), marginTop: k(1) }}>
+                        {p ? `${formatClock(p.start, h24)}  ${p.title}` : 'No information'}
+                      </Text>
+                    </View>
+                  </>
+                )}
+              </Focusable>
+            );
+          }}
+        />
+      </View>
+    </View>
+  );
+}
