@@ -2,7 +2,7 @@
   "expo": {
     "name": "Nova",
     "slug": "nova-iptv",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -21,11 +21,11 @@
         },
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "5"
+      "buildNumber": "6"
     },
     "android": {
       "package": "com.theloop705.nova",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "backgroundColor": "#1B3A8C",
         "foregroundImage": "./assets/android-icon-foreground.png",

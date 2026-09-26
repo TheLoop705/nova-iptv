@@ -236,6 +236,64 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Skip feedback and Next episode
+// ---------------------------------------------------------------------------------------------
+
+/** Running total while skipping with the remote or keyboard: "⏩ +30 s". */
+export function SeekHint({ seconds }: { seconds: number }) {
+  const k = useK();
+  const back = seconds < 0;
+  const abs = Math.abs(seconds);
+  const label = abs >= 60 && abs % 60 === 0 ? `${abs / 60} min` : abs >= 60 ? `${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, '0')} min` : `${abs} s`;
+  return (
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', paddingBottom: k(170) }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.videoScrim, borderRadius: 999, paddingHorizontal: k(18), paddingVertical: k(9) }}>
+        <Icon name={back ? 'rewind' : 'fast-forward'} size={k(24)} color={colors.onVideo} />
+        <Text style={{ color: colors.onVideo, fontSize: k(18), fontWeight: '800', marginLeft: k(10), fontVariant: ['tabular-nums'] }}>
+          {back ? '−' : '+'}
+          {label}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * "Next episode" during the credits. Focused (white) whenever the controls are hidden, because OK
+ * then plays it; with the controls up it sits above them and Up reaches it.
+ */
+export function NextEpisodeButton({ next, focused, raised, onPress }: { next: NextItem; focused: boolean; raised: boolean; onPress: () => void }) {
+  const k = useK();
+  return (
+    <View pointerEvents="box-none" style={{ position: 'absolute', right: k(28), bottom: raised ? k(250) : k(40) }}>
+      <Focusable
+        focused={focused}
+        alwaysShowFocus
+        onPress={onPress}
+        accessibilityLabel="Next episode"
+        style={{ flexDirection: 'row', alignItems: 'center', minHeight: Math.max(k(52), TOUCH_MIN), paddingHorizontal: k(18), paddingVertical: k(8), borderRadius: k(12), backgroundColor: colors.videoScrim, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }}
+        hoverStyle={{ backgroundColor: 'rgba(255,255,255,0.2)' }}
+        focusStyle={{ backgroundColor: colors.focus, borderColor: colors.focus, transform: [{ scale: 1.04 }] }}
+      >
+        {({ focused: f }) => (
+          <>
+            <Icon name="skip-next" size={k(26)} color={f ? colors.focusText : colors.onVideo} />
+            <View style={{ marginLeft: k(10) }}>
+              <Text style={{ color: f ? colors.focusText : colors.onVideo, fontSize: k(16), fontWeight: '800' }}>Next episode</Text>
+              {next.subtitle ? (
+                <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.textDim, fontSize: k(12), marginTop: k(1), maxWidth: k(260) }}>
+                  {next.subtitle}
+                </Text>
+              ) : null}
+            </View>
+          </>
+        )}
+      </Focusable>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Volume
 // ---------------------------------------------------------------------------------------------
 

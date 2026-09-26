@@ -18,9 +18,9 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 
 | Home | Live TV |
 | --- | --- |
-| ![Home: recently watched with progress, favorite channels](docs/screenshots/home.png) | ![Live TV: categories, channels with what's on now, and the guide grid](docs/screenshots/live-tv.png) |
+| ![Home: recently watched on the left, search on the right](docs/screenshots/home.png) | ![Live TV: categories, channels with what's on now, and the guide grid](docs/screenshots/live-tv.png) |
 | **Player** | **Series** |
-| ![Player: controls, seek bar with time preview](docs/screenshots/player.png) | ![Series: watched and in-progress episodes](docs/screenshots/series.png) |
+| ![Player: controls, seek bar and the skip indicator](docs/screenshots/player.png) | ![Series: watched and in-progress episodes](docs/screenshots/series.png) |
 | **Movie** | **Movies** |
 | ![Movie details with resume and watched state](docs/screenshots/movie.png) | ![Movie categories and poster grid](docs/screenshots/movies.png) |
 
@@ -31,7 +31,7 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 
 ## Features
 
-- **Home**: *Recently watched* mixes live channels, movies and series episodes, newest first, with where you left off. Selecting a series continues it (the next episode once one is finished). *Favorite channels* sits below.
+- **Home** (the start page) is split in two. On the left, *Recently watched* mixes live channels, movies and series episodes, newest first, with when you watched them and where you left off. Selecting a series continues it (the next episode once one is finished). On the right is a big **Search** button.
 - **Watch progress** for every movie and episode: resume points, "12 min left", and a *Watched* mark once finished (or set by hand). It's kept when the page reloads, and on the web it's shared between browsers through the Nova server.
 - **Live TV guide (EPG grid)**: categories, channels with what's on now, and the timeline grid side by side, with a slim programme strip and live preview on top, a now-line, and number-key channel entry.
 - **Favorite categories**: star any Live TV, movie or series category from its menu and it moves to the top of the list.
@@ -53,9 +53,9 @@ Each platform follows its own conventions:
 | --- | --- | --- | --- |
 | Engine | ExoPlayer (Media3) | AVPlayer for HLS/MP4, VLC for MKV/AVI/TS + automatic fallback | hls.js / mpegts.js / `<video>` |
 | System integration | Media session → Alexa voice transport controls ("Alexa, pause / rewind"), Bluetooth/HDMI-CEC media keys | Lock screen & Control Center (Now Playing), AirPlay, Picture in Picture (auto when leaving the app) | Media Session API (OS media overlay, hardware media keys; next/previous = channel zapping), Picture in Picture, true browser fullscreen |
-| Controls | D-pad, remote play/pause/FF/RW (10 s, hold to accelerate), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, volume slider, YouTube keyboard shortcuts; moving the mouse shows the cursor and controls, which hide again when idle |
+| Controls | D-pad ◀ ▶ and the remote's ⏪ ⏩ rewind / fast-forward (10 s, hold for 30 s then 60 s steps, with a running total on screen), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, volume slider, YouTube keyboard shortcuts; moving the mouse shows the cursor and controls, which hide again when idle |
 
-Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, "Up next" episode countdown, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
+Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, a **Next episode** button during the credits (OK plays it on TV), an "Up next" countdown at the very end, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
 
 ## Layout
 

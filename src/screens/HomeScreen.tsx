@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, ScrollView, Text, View } from 'react-native';
+import { FlatList, Platform, ScrollView, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import type { Channel } from '../types';
 import { colors, fonts, radius, useLayout } from '../theme';
@@ -7,27 +7,25 @@ import { useLibrary, ALL } from '../store/library';
 import { useActivePlaylist, useSettings, watchId, type VodProgress, type WatchEntry } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
+import { openSearch } from '../store/actions';
 import { Layer, useKeys } from '../input/keys';
 import { programAt } from '../services/epg';
 import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
 import { imageUrl } from '../services/http';
-import { formatClock, formatDuration } from '../utils/format';
+import { formatClock, formatDay, formatDuration } from '../utils/format';
 import { useNow } from '../utils/hooks';
 import { Focusable } from '../components/Focusable';
 import { Badge } from '../components/Badge';
-import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
 import { Icon } from '../components/Icon';
 
-const MAX_RECENT = 24;
+const MAX_RECENT = 40;
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
-interface Row {
-  id: string;
-  title: string;
-  entries: WatchEntry[];
-}
-
-/** Home: pick up whatever you watched last — live channels, movies and series — plus favourite channels. */
+/**
+ * Home, the app's start page. Split in two on TVs and desktops: everything watched recently on the
+ * left (live channels, movies and episodes, newest first) and a big Search button on the right.
+ */
 export function HomeScreen() {
   const { s, mode, type } = useLayout();
   const tv = mode === 'tv';
@@ -38,7 +36,6 @@ export function HomeScreen() {
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const recents = useSettings((st) => (pid ? st.recents[pid] : undefined));
   const recentMovies = useSettings((st) => (pid ? st.recentMovies[pid] : undefined));
-  const favorites = useSettings((st) => (pid ? st.favorites[pid] : undefined));
   const progress = useSettings((st) => st.vodProgress);
   const clock24 = useSettings((st) => st.prefs.clock24);
   const playlist = useActivePlaylist();
@@ -48,8 +45,7 @@ export function HomeScreen() {
   const fullscreen = usePlayer((st) => st.fullscreen && !!st.item);
   const now = useNow(30000);
 
-  // Recently watched: the history (newest first), topped up with channels and movies watched before
-  // history existed so the row isn't empty after an update.
+  // Newest first. Channels and movies watched before the history existed have no time and follow at the end.
   const recent = useMemo(() => {
     const out: WatchEntry[] = [];
     const seen = new Set<string>();
@@ -59,25 +55,11 @@ export function HomeScreen() {
       seen.add(e.id);
       out.push(e);
     };
-    (history ?? []).forEach(add);
+    [...(history ?? [])].sort((a, b) => b.at - a.at).forEach(add);
     (recents ?? []).forEach((channelId) => add({ kind: 'live', id: watchId.live(channelId), channelId, at: 0 }));
     (recentMovies ?? []).forEach((item) => add({ kind: 'movie', id: watchId.movie(item.id), item, at: 0 }));
     return out;
   }, [history, recents, recentMovies, byId]);
-
-  const favChannels = useMemo(
-    () => (favorites ?? []).filter((id) => byId[id]).map((channelId): WatchEntry => ({ kind: 'live', id: watchId.live(channelId), channelId, at: 0 })),
-    [favorites, byId]
-  );
-
-  const rows: Row[] = useMemo(
-    () =>
-      [
-        { id: 'recent', title: 'Recently watched', entries: recent },
-        { id: 'fav', title: 'Favorite channels', entries: favChannels },
-      ].filter((r) => r.entries.length),
-    [recent, favChannels]
-  );
 
   // ---- actions ----
   const play = useCallback((e: WatchEntry) => {
@@ -132,143 +114,223 @@ export function HomeScreen() {
     [byId, pid, play]
   );
 
-  // ---- remote ----
-  const [row, setRow] = useState(0);
-  const [col, setCol] = useState(0);
-  const listRefs = useRef<Record<string, FlatList<WatchEntry> | null>>({});
-  const scrollRef = useRef<ScrollView>(null);
-  const rowY = useRef<Record<string, number>>({});
-  const cardW = tv ? s(208) : 232;
-  const gap = tv ? s(14) : 12;
+  // ---- remote: the list on the left, the Search button on the right ----
+  const [zone, setZone] = useState<'list' | 'search'>(recent.length ? 'list' : 'search');
+  const [idx, setIdx] = useState(0);
+  const listRef = useRef<FlatList<WatchEntry>>(null);
+  const rowH = tv ? s(76) : 84;
 
   useEffect(() => {
-    if (row >= rows.length) setRow(Math.max(0, rows.length - 1));
-    else if (rows[row] && col >= rows[row].entries.length) setCol(Math.max(0, rows[row].entries.length - 1));
-  }, [rows, row, col]);
+    if (!recent.length) setZone('search');
+    else if (idx >= recent.length) setIdx(recent.length - 1);
+  }, [recent.length, idx]);
 
   useEffect(() => {
-    const r = rows[row];
-    if (!r) return;
-    listRefs.current[r.id]?.scrollToOffset({ offset: Math.max(0, (col - 1) * (cardW + gap)), animated: true });
-    const y = rowY.current[r.id];
-    if (y !== undefined) scrollRef.current?.scrollTo({ y: Math.max(0, y - (tv ? s(80) : 80)), animated: true });
-  }, [row, col, rows, cardW, gap, tv, s]);
+    if (zone === 'list') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 2) * rowH), animated: true });
+  }, [idx, zone, rowH]);
 
   const keysEnabled = !menuFocused && !detailOpen && !sheetOpen && !fullscreen;
   useKeys(
     (e) => {
-      const r = rows[row];
+      if (zone === 'search') {
+        if (e.key === 'select') return openSearch();
+        if (e.key === 'left') return recent.length ? setZone('list') : false;
+        return e.key === 'up' || e.key === 'down' || e.key === 'right' ? undefined : false;
+      }
+      const cur = recent[idx];
       switch (e.key) {
         case 'up':
-          return setRow((i) => Math.max(0, i - 1));
+          return setIdx((i) => Math.max(0, i - 1));
         case 'down':
-          return setRow((i) => Math.min(rows.length - 1, i + 1));
-        case 'left':
-          if (col === 0) return false; // to the menu
-          return setCol(col - 1);
+          return setIdx((i) => Math.min(recent.length - 1, i + 1));
+        case 'chup':
+          return setIdx((i) => Math.max(0, i - 5));
+        case 'chdown':
+          return setIdx((i) => Math.min(recent.length - 1, i + 5));
         case 'right':
-          return r ? setCol(Math.min(r.entries.length - 1, col + 1)) : undefined;
+          return setZone('search');
+        case 'left':
+          return false; // on to the menu
         case 'select':
-          if (!r?.entries[col]) return;
-          return e.long ? openOptions(r.entries[col]) : play(r.entries[col]);
+          if (!cur) return;
+          return e.long ? openOptions(cur) : play(cur);
         case 'menu':
-          return r?.entries[col] ? openOptions(r.entries[col]) : undefined;
+          return cur ? openOptions(cur) : undefined;
         default:
           return false;
       }
     },
-    keysEnabled && rows.length > 0,
+    keysEnabled,
     Layer.screen
   );
 
   const hour = new Date(now).getHours();
   const greeting = hour < 5 ? 'Good evening' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
+  const header = (
+    <View style={{ marginBottom: tv ? s(14) : 14 }}>
+      <Text style={[type('display'), { color: colors.text }]}>{greeting}</Text>
+      <Text style={[type('body'), { color: colors.textDim, marginTop: k(2) }]}>{playlist?.name}</Text>
+    </View>
+  );
+
+  const renderRow = (e: WatchEntry, index: number) => (
+    <WatchRow
+      key={e.id}
+      entry={e}
+      channel={e.kind === 'live' ? byId[e.channelId] : undefined}
+      epg={e.kind === 'live' ? epg[e.channelId] : undefined}
+      progress={e.kind === 'movie' ? progress[movieKey(e.item)] : e.kind === 'episode' ? progress[episodeKey(e.episode)] : undefined}
+      height={rowH}
+      focused={zone === 'list' && index === idx}
+      now={now}
+      clock24={clock24}
+      tv={tv}
+      k={k}
+      onPress={() => {
+        setZone('list');
+        setIdx(index);
+        play(e);
+      }}
+      onMenu={(anchor) => openOptions(e, anchor)}
+    />
+  );
+
+  // TV/desktop: its own scrolling list; phones: rows inside the page's scroll view
+  const list = recent.length ? (
+    tv ? (
+      <FlatList
+        ref={listRef}
+        data={recent}
+        keyExtractor={(e) => e.id}
+        getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
+        contentContainerStyle={{ paddingBottom: s(24) }}
+        showsVerticalScrollIndicator={false}
+        renderItem={({ item: e, index }) => renderRow(e, index)}
+      />
+    ) : (
+      <View>{recent.map(renderRow)}</View>
+    )
+  ) : (
+    <View style={{ paddingVertical: tv ? s(30) : 24, alignItems: 'flex-start' }}>
+      <Icon name="history" size={k(34)} color={colors.muted} />
+      <Text style={{ color: colors.text, fontSize: k(16), fontWeight: '800', marginTop: k(10), fontFamily: fonts.regular }}>Nothing watched yet</Text>
+      <Text style={{ color: colors.textDim, fontSize: k(12.5), marginTop: k(4), maxWidth: k(360), fontFamily: fonts.regular }}>
+        Channels, movies and episodes you watch show up here, newest first, with where you left off.
+      </Text>
+    </View>
+  );
+
+  const search = <SearchButton focused={zone === 'search'} tv={tv} k={k} onPress={openSearch} />;
+
+  if (!tv) {
+    return (
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+        {header}
+        {search}
+        <Text style={[type('heading'), { color: colors.text, marginTop: 22, marginBottom: 8 }]}>Recently watched</Text>
+        {list}
+      </ScrollView>
+    );
+  }
+
   return (
-    <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: tv ? s(24) : 16, paddingBottom: tv ? s(40) : 32 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: tv ? s(28) : 16, marginBottom: tv ? s(20) : 16 }}>
-        <View style={{ flex: 1 }}>
-          <Text style={[type('display'), { color: colors.text }]}>{greeting}</Text>
-          <Text style={[type('body'), { color: colors.textDim, marginTop: k(2) }]}>{playlist?.name}</Text>
-        </View>
-        {tv ? <Text style={[type('title'), { color: colors.text, fontVariant: ['tabular-nums'] }]}>{formatClock(now, clock24)}</Text> : null}
+    <View style={{ flex: 1, flexDirection: 'row', paddingTop: s(24), paddingLeft: s(28), paddingRight: s(24) }}>
+      <View style={{ flex: 1.15, paddingRight: s(24) }}>
+        {header}
+        <Text style={[type('heading'), { color: zone === 'list' ? colors.text : colors.textDim, marginBottom: s(8) }]}>Recently watched</Text>
+        <View style={{ flex: 1 }}>{list}</View>
       </View>
-
-      {rows.length === 0 ? <EmptyHome tv={tv} k={k} enabled={keysEnabled} /> : null}
-
-      {rows.map((r, ri) => (
-        <View key={r.id} onLayout={(e) => (rowY.current[r.id] = e.nativeEvent.layout.y)} style={{ marginBottom: tv ? s(22) : 20 }}>
-          <Text style={[type('heading'), { color: ri === row && tv ? colors.text : colors.textDim, paddingHorizontal: tv ? s(28) : 16, marginBottom: tv ? s(10) : 10 }]}>{r.title}</Text>
-          <FlatList
-            ref={(el) => {
-              listRefs.current[r.id] = el;
-            }}
-            horizontal
-            data={r.entries}
-            keyExtractor={(e) => e.id}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: tv ? s(28) : 16, gap, paddingVertical: tv ? s(8) : 4 }}
-            getItemLayout={(_d, i) => ({ length: cardW + gap, offset: (cardW + gap) * i, index: i })}
-            renderItem={({ item: e, index: ci }) => (
-              <WatchCard
-                entry={e}
-                channel={e.kind === 'live' ? byId[e.channelId] : undefined}
-                epg={e.kind === 'live' ? epg[e.channelId] : undefined}
-                progress={e.kind === 'movie' ? progress[movieKey(e.item)] : e.kind === 'episode' ? progress[episodeKey(e.episode)] : undefined}
-                width={cardW}
-                focused={ri === row && ci === col}
-                now={now}
-                clock24={clock24}
-                tv={tv}
-                k={k}
-                onPress={() => {
-                  setRow(ri);
-                  setCol(ci);
-                  play(e);
-                }}
-                onLongPress={(anchor) => openOptions(e, anchor)}
-              />
-            )}
-          />
-        </View>
-      ))}
-    </ScrollView>
+      <View style={{ width: 1, backgroundColor: colors.border, marginBottom: s(24) }} />
+      <View style={{ flex: 1, paddingLeft: s(24) }}>
+        <Text style={[type('title'), { color: colors.text, alignSelf: 'flex-end', fontVariant: ['tabular-nums'] }]}>{formatClock(now, clock24)}</Text>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: s(40) }}>{search}</View>
+      </View>
+    </View>
   );
 }
 
-function WatchCard({
+/** "12 min ago", "Today 17:01", "Yesterday 21:30"; nothing for entries from before the history existed. */
+function watchedAgo(at: number, now: number, clock24: boolean): string | undefined {
+  if (!at) return undefined;
+  const min = Math.floor((now - at) / 60000);
+  if (min < 1) return 'Just now';
+  if (min < 60) return `${min} min ago`;
+  return `${formatDay(at, now)} ${formatClock(at, clock24)}`;
+}
+
+function SearchButton({ focused, tv, k, onPress }: { focused: boolean; tv: boolean; k: (n: number) => number; onPress: () => void }) {
+  const hint = Platform.OS === 'web' ? `or press ${isMac ? '⌘K' : 'Ctrl K'}` : Platform.isTV ? 'Hold ☰ Menu to search by voice' : undefined;
+  if (!tv) {
+    return (
+      <Focusable
+        focused={focused}
+        onPress={onPress}
+        accessibilityLabel="Search"
+        style={{ flexDirection: 'row', alignItems: 'center', height: 56, borderRadius: radius.pill, paddingHorizontal: 20, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border }}
+      >
+        <Icon name="magnify" size={24} color={colors.accent} />
+        <Text style={{ color: colors.textDim, fontSize: 16, marginLeft: 12, fontFamily: fonts.regular }}>Search channels, movies and series</Text>
+      </Focusable>
+    );
+  }
+  return (
+    <Focusable
+      focused={focused}
+      alwaysShowFocus={false}
+      onPress={onPress}
+      accessibilityLabel="Search"
+      style={{ alignItems: 'center', justifyContent: 'center', width: k(260), paddingVertical: k(30), borderRadius: k(radius.xl), backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
+      hoverStyle={{ backgroundColor: colors.surface2, borderColor: colors.borderStrong }}
+      focusStyle={{ backgroundColor: colors.focus, borderColor: colors.focus, transform: [{ scale: 1.04 }] }}
+    >
+      {({ focused: f }) => (
+        <>
+          <View style={{ width: k(84), height: k(84), borderRadius: k(42), alignItems: 'center', justifyContent: 'center', backgroundColor: f ? colors.focusText : colors.accentFill }}>
+            <Icon name="magnify" size={k(44)} color={f ? colors.focus : colors.onAccent} />
+          </View>
+          <Text style={{ color: f ? colors.focusText : colors.text, fontSize: k(22), fontWeight: '800', marginTop: k(14), fontFamily: fonts.regular }}>Search</Text>
+          <Text style={{ color: f ? colors.focusDim : colors.textDim, fontSize: k(12.5), marginTop: k(4), textAlign: 'center', fontFamily: fonts.regular }}>Channels, movies and series</Text>
+          {hint ? <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11), marginTop: k(10), fontFamily: fonts.regular }}>{hint}</Text> : null}
+        </>
+      )}
+    </Focusable>
+  );
+}
+
+function WatchRow({
   entry,
   channel,
   epg,
   progress,
-  width,
+  height,
   focused,
   now,
   clock24,
   tv,
   k,
   onPress,
-  onLongPress,
+  onMenu,
 }: {
   entry: WatchEntry;
   channel?: Channel;
   epg?: ReturnType<typeof useLibrary.getState>['epg'][string];
   progress?: VodProgress;
-  width: number;
+  height: number;
   focused: boolean;
   now: number;
   clock24: boolean;
   tv: boolean;
   k: (n: number) => number;
   onPress: () => void;
-  onLongPress: (anchor?: MenuAnchor) => void;
+  onMenu: (anchor?: MenuAnchor) => void;
 }) {
-  const imgH = Math.round((width * 9) / 16);
+  const thumbH = height - k(12);
+  const thumbW = Math.round((thumbH * 16) / 9);
   let image: string | undefined;
   let badge: { label: string; tone: 'live' | 'catchup' | 'neutral' };
   let title: string;
   let line1: string | undefined;
-  let line2: string | undefined;
   let fraction = 0;
   let done = false;
 
@@ -276,123 +338,78 @@ function WatchCard({
     const p = programAt(epg, now);
     badge = { label: 'LIVE', tone: 'live' };
     title = channel ? channel.name : 'Channel';
-    line1 = p?.title || (channel ? `Channel ${channel.num}` : undefined);
-    line2 = p ? `${formatClock(p.start, clock24)} – ${formatClock(p.end, clock24)}` : undefined;
+    line1 = p ? `${p.title} · ${formatClock(p.start, clock24)} – ${formatClock(p.end, clock24)}` : channel ? `Channel ${channel.num}` : undefined;
     fraction = p ? (now - p.start) / (p.end - p.start) : 0;
   } else {
     const resume = progress && progress.pos > 0 && progress.dur > 0;
     done = !!progress?.done && !resume;
     fraction = resume ? progress!.pos / progress!.dur : 0;
-    const left = resume ? `${Math.max(1, Math.round((progress!.dur - progress!.pos) / 60))} min left` : undefined;
+    const left = resume ? `${Math.max(1, Math.round((progress!.dur - progress!.pos) / 60))} min left` : done ? 'Watched' : undefined;
     if (entry.kind === 'movie') {
       image = entry.item.poster;
       badge = { label: 'MOVIE', tone: 'neutral' };
       title = entry.item.name;
-      line1 = left ?? (done ? 'Watched' : entry.item.year);
+      line1 = [left, entry.item.year].filter(Boolean).join(' · ') || undefined;
     } else {
       image = entry.episode.image || entry.series.poster;
       badge = { label: 'SERIES', tone: 'catchup' };
       title = entry.series.name;
-      line1 = `S${entry.episode.season} E${entry.episode.episode} · ${entry.episode.title}`;
-      line2 = left ?? (done ? 'Watched · next episode' : undefined);
+      line1 = [`S${entry.episode.season} E${entry.episode.episode} · ${entry.episode.title}`, left].filter(Boolean).join(' · ');
     }
   }
+  const when = watchedAgo(entry.at, now, clock24);
 
   return (
     <Focusable
       focused={focused}
       onPress={onPress}
-      onLongPress={() => onLongPress()}
-      onContextMenu={onLongPress}
+      onLongPress={() => onMenu()}
+      onContextMenu={onMenu}
       accessibilityLabel={title}
-      style={{ width, borderRadius: radius.md, padding: 0 }}
-      hoverStyle={{ transform: [{ scale: 1.03 }] }}
-      focusStyle={{ transform: [{ scale: 1.05 }] }}
+      style={{ height: height - k(6), marginBottom: k(6), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(6), backgroundColor: colors.surface }}
+      focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.02 }] }}
     >
-      {({ focused: f, hovered }) => (
-        <View>
-          <View
-            style={{
-              height: imgH,
-              borderRadius: k(radius.md),
-              borderWidth: tv ? k(2.5) : 2,
-              borderColor: f ? colors.focus : hovered ? colors.borderStrong : 'transparent',
-              backgroundColor: colors.surface2,
-              overflow: 'hidden',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
+      {({ focused: f }) => (
+        <>
+          <View style={{ width: thumbW, height: thumbH, borderRadius: k(radius.sm), backgroundColor: colors.surface2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
             {entry.kind === 'live' ? (
-              channel ? <Logo uri={channel.logo} name={channel.name} size={imgH * 0.36} rounded={k(6)} /> : null
+              channel ? <Logo uri={channel.logo} name={channel.name} size={thumbH * 0.42} rounded={k(5)} /> : null
             ) : image ? (
               <Image source={{ uri: imageUrl(image) }} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }} contentFit="cover" cachePolicy="memory-disk" recyclingKey={image} transition={150} />
             ) : (
-              <Icon name={entry.kind === 'movie' ? 'movie-open-outline' : 'television-play'} size={imgH * 0.3} color={colors.muted} />
+              <Icon name={entry.kind === 'movie' ? 'movie-open-outline' : 'television-play'} size={thumbH * 0.4} color={colors.muted} />
             )}
-            <View style={{ position: 'absolute', top: k(7), left: k(7), flexDirection: 'row' }}>
-              <Badge label={badge.label} tone={badge.tone} />
-            </View>
             {done ? (
-              <View style={{ position: 'absolute', top: k(6), right: k(6), backgroundColor: colors.videoScrim, borderRadius: radius.pill, padding: k(2) }}>
-                <Icon name="check-circle" size={k(15)} color={colors.success} />
+              <View style={{ position: 'absolute', top: k(4), right: k(4), backgroundColor: colors.videoScrim, borderRadius: radius.pill, padding: k(1.5) }}>
+                <Icon name="check-circle" size={k(13)} color={colors.success} />
               </View>
             ) : null}
             {fraction > 0 ? (
-              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(4), backgroundColor: colors.videoScrim }}>
+              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(3.5), backgroundColor: colors.videoScrim }}>
                 <View style={{ width: `${Math.min(100, fraction * 100)}%`, height: '100%', backgroundColor: entry.kind === 'live' ? colors.live : colors.accent }} />
               </View>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: k(13), fontWeight: '700', marginTop: k(7), fontFamily: fonts.regular }}>
-            {title}
-          </Text>
-          {line1 ? (
-            <Text numberOfLines={1} style={{ color: colors.muted, fontSize: k(11.5), marginTop: k(1), fontFamily: fonts.regular }}>
-              {line1}
+          <View style={{ flex: 1, marginLeft: k(12), marginRight: k(8) }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Badge label={badge.label} tone={badge.tone} />
+              <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : colors.text, fontSize: k(14), fontWeight: '700', fontFamily: fonts.regular }}>
+                {title}
+              </Text>
+            </View>
+            {line1 ? (
+              <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.textDim, fontSize: k(12), marginTop: k(4), fontFamily: fonts.regular }}>
+                {line1}
+              </Text>
+            ) : null}
+          </View>
+          {when ? (
+            <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11), marginRight: k(6), fontVariant: ['tabular-nums'], fontFamily: fonts.regular }}>
+              {when}
             </Text>
           ) : null}
-          {line2 ? (
-            <Text numberOfLines={1} style={{ color: colors.muted, fontSize: k(11), marginTop: k(1), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>
-              {line2}
-            </Text>
-          ) : null}
-        </View>
+        </>
       )}
     </Focusable>
-  );
-}
-
-function EmptyHome({ tv, k, enabled }: { tv: boolean; k: (n: number) => number; enabled: boolean }) {
-  const setScreen = useUI((st) => st.setScreen);
-  const [btn, setBtn] = useState(0);
-  const targets = [
-    { label: 'Live TV', icon: 'television-classic', screen: 'guide' as const },
-    { label: 'Movies', icon: 'movie-open-outline', screen: 'movies' as const },
-    { label: 'Series', icon: 'television-play', screen: 'series' as const },
-  ];
-  useKeys(
-    (e) => {
-      if (e.key === 'left') return btn === 0 ? false : setBtn(btn - 1);
-      if (e.key === 'right') return setBtn(Math.min(targets.length - 1, btn + 1));
-      if (e.key === 'select') return setScreen(targets[btn].screen);
-      return false;
-    },
-    enabled,
-    Layer.screen
-  );
-  return (
-    <View style={{ alignItems: 'center', paddingVertical: tv ? k(50) : 40, paddingHorizontal: 20 }}>
-      <Icon name="history" size={k(40)} color={colors.muted} />
-      <Text style={{ color: colors.text, fontSize: k(17), fontWeight: '800', marginTop: k(10), fontFamily: fonts.regular }}>Nothing watched yet</Text>
-      <Text style={{ color: colors.textDim, fontSize: k(12.5), marginTop: k(4), textAlign: 'center', fontFamily: fonts.regular }}>
-        Channels, movies and episodes you watch show up here, with where you left off.
-      </Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: k(10), marginTop: k(18) }}>
-        {targets.map((t, i) => (
-          <Button key={t.screen} label={t.label} icon={t.icon} primary={i === 0} focused={i === btn} onPress={() => setScreen(t.screen)} />
-        ))}
-      </View>
-    </View>
   );
 }

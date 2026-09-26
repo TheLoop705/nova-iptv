@@ -17,7 +17,7 @@ import { useNow } from '../utils/hooks';
 import { Icon } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
-import { PlayerGestures, PlayerNotices, SeekBar, TOUCH_MIN, VolumeSlider } from './PlayerExtras';
+import { NextEpisodeButton, PlayerGestures, PlayerNotices, SeekBar, SeekHint, TOUCH_MIN, VolumeSlider } from './PlayerExtras';
 import { SPEEDS } from './playback';
 import { playNextItem } from '../services/vod';
 import type { Channel } from '../types';
@@ -87,7 +87,8 @@ export function PlayerOverlay() {
   const isFav = !!ch && !!favorites?.includes(ch.id);
 
   const [visible, setVisible] = useState(true);
-  const [row, setRow] = useState<'seek' | 'controls'>(live ? 'controls' : 'seek');
+  // 'next': the Next episode button near the end of an episode
+  const [row, setRow] = useState<'seek' | 'controls' | 'next'>(live ? 'controls' : 'seek');
   const [ctrl, setCtrl] = useState(0);
   const [listOpen, setListOpen] = useState(false);
   const [digits, setDigits] = useState('');
@@ -118,6 +119,37 @@ export function PlayerOverlay() {
     if (status === 'playing') poke();
     else if (status === 'paused' || status === 'error') setVisible(true);
   }, [status, poke]);
+
+  // Once the controls hide, the remote is back on the timeline: left/right skip again
+  useEffect(() => {
+    if (!visible && !live) setRow('seek');
+  }, [visible, live]);
+
+  // Remote/keyboard skipping (left/right, ⏪/⏩, J/L): 10 s a press, 30 s then 60 s while held, with a
+  // running total on screen
+  const [seekTotal, setSeekTotal] = useState<number | null>(null);
+  const seekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skip = (delta: number) => {
+    cmd.seekBy(delta);
+    setSeekTotal((t) => (t !== null && Math.sign(t) === Math.sign(delta) ? t + delta : delta));
+    if (seekTimer.current) clearTimeout(seekTimer.current);
+    seekTimer.current = setTimeout(() => setSeekTotal(null), 1100);
+    poke();
+  };
+
+  // "Next episode" once the credits start (last 6 %, between 1 and 3 minutes)
+  const nextItem = item.kind === 'vod' ? item.next : undefined;
+  const lead = duration > 0 ? Math.min(180, Math.max(60, duration * 0.06)) : 0;
+  const nearEnd = !!nextItem && duration > 0 && position >= duration - lead && status !== 'ended' && !upNext;
+  const playNext = () => {
+    if (item.kind !== 'vod' || !item.next) return;
+    saveVodProgress(item.key, duration, duration);
+    setUpNext(null);
+    playNextItem(item.next);
+  };
+  useEffect(() => {
+    if (!nearEnd && row === 'next') setRow('seek');
+  }, [nearEnd, row]);
 
   // VOD resume points
   const posRef = useRef({ position, duration });
@@ -198,8 +230,6 @@ export function PlayerOverlay() {
       if (ch && program && canCatchup(ch, program, now)) list.push({ id: 'restart', icon: 'restart', label: 'Restart' });
     } else {
       list.push({ id: 'playpause', icon: status === 'paused' ? 'play' : 'pause', label: status === 'paused' ? 'Play' : 'Pause' });
-      list.push({ id: 'rw', icon: 'rewind-10', label: '-10s' });
-      list.push({ id: 'ff', icon: 'fast-forward-10', label: '+10s' });
       if (item.kind === 'catchup') list.push({ id: 'golive', icon: 'broadcast', label: 'Live' });
     }
     if (audioTracks.length > 1) list.push({ id: 'audio', icon: 'volume-high', label: 'Audio' });
@@ -309,10 +339,6 @@ export function PlayerOverlay() {
         return ch && playChannel(ch.id, { fullscreen: true });
       case 'playpause':
         return togglePlay();
-      case 'rw':
-        return cmd.seekBy(-10);
-      case 'ff':
-        return cmd.seekBy(10);
       case 'audio':
         return audioSheet();
       case 'subs':
@@ -410,20 +436,21 @@ export function PlayerOverlay() {
           poke();
           return setCtrl(Math.max(0, Math.min(controls.length - 1, ctrl + (e.key === 'left' ? -1 : 1))));
         }
-        cmd.seekBy(e.key === 'left' ? -step : step);
-        return poke();
+        // rewind / fast-forward, like the remote's ⏪ ⏩
+        return skip(e.key === 'left' ? -step : step);
       case 'rw':
       case 'ff':
         // 10 s per press like Fire TV / Alexa / YouTube (J, L); holding accelerates
-        cmd.seekBy(e.key === 'rw' ? -step : step);
-        return poke();
+        return skip(e.key === 'rw' ? -step : step);
       case 'up':
-        setRow('seek');
+        setRow(nearEnd && visible && row === 'seek' ? 'next' : row === 'controls' ? 'seek' : row);
         return poke();
       case 'down':
-        if (visible) setRow('controls');
+        if (visible) setRow(row === 'next' ? 'seek' : 'controls');
         return poke();
       case 'select':
+        // near the end, OK takes the Next episode button (it's focused whenever the controls are hidden)
+        if (nearEnd && (!visible || row === 'next')) return playNext();
         if (visible && row === 'controls') return runControl(controls[ctrl]?.id);
         togglePlay();
         return poke();
@@ -491,11 +518,7 @@ export function PlayerOverlay() {
                   <RoundBtn icon="chevron-down" k={k} onPress={() => zap(1)} />
                 </>
               ) : (
-                <>
-                  <RoundBtn icon="rewind-10" k={k} onPress={() => (cmd.seekBy(-10), poke())} />
-                  <RoundBtn icon={status === 'paused' ? 'play' : 'pause'} k={k} big onPress={() => (togglePlay(), poke())} />
-                  <RoundBtn icon="fast-forward-10" k={k} onPress={() => (cmd.seekBy(10), poke())} />
-                </>
+                <RoundBtn icon={status === 'paused' ? 'play' : 'pause'} k={k} big onPress={() => (togglePlay(), poke())} />
               )}
             </View>
           ) : null}
@@ -599,6 +622,9 @@ export function PlayerOverlay() {
           <Text style={{ color: colors.onVideo, fontSize: k(30), fontWeight: '800', letterSpacing: 2, fontVariant: ['tabular-nums'] }}>{digits}</Text>
         </View>
       ) : null}
+
+      {seekTotal !== null ? <SeekHint seconds={seekTotal} /> : null}
+      {nearEnd && nextItem ? <NextEpisodeButton next={nextItem} focused={!visible || row === 'next'} raised={visible} onPress={playNext} /> : null}
 
       <PlayerNotices
         controlsVisible={visible && !listOpen}
