@@ -7,7 +7,8 @@ import { flushSettings } from '../store/settings';
 import { webUpdate, type Update, type UpdaterState } from './updateCore';
 
 export { isNewer, type Update } from './updateCore';
-export const updatesSupported = true;
+// Desktop updates replace the installed program; reloading its bundled site cannot update it.
+export const updatesSupported = process.env.EXPO_PUBLIC_DESKTOP !== '1';
 export const installedVersion = () => appJson.expo.version;
 export const updateSource = 'Updates are loaded from this Nova server';
 let pending: Promise<Update | null> | undefined;
@@ -15,6 +16,7 @@ let pending: Promise<Update | null> | undefined;
 export const useUpdater = create<UpdaterState>((set, get) => ({
   status: 'idle', progress: 0,
   check: () => {
+    if (!updatesSupported) return Promise.resolve(null);
     if (pending) return pending;
     if (get().status === 'installing') return Promise.resolve(get().update ?? null);
     set({ status: 'checking', error: undefined });
@@ -64,6 +66,7 @@ export function openUpdateSheet(update: Update) {
 
 export function useAutoUpdateCheck() {
   useEffect(() => {
+    if (!updatesSupported) return;
     let active = true;
     let offered = '';
     const offer = async () => {

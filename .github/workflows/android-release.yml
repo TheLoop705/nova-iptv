@@ -1,4 +1,4 @@
-name: Build and release Android
+name: Build and release Nova
 
 on:
   push:
@@ -160,6 +160,61 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  windows:
+    name: Build Windows installer
+    if: github.repository == 'TheLoop705/nova-iptv'
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install desktop build tools
+        run: npm ci --prefix desktop
+
+      - name: Build desktop app
+        run: npm --prefix desktop run prepare:app
+
+      - name: Check desktop startup, storage and streaming proxy
+        run: npm run test:windows
+
+      - name: Package Windows installer
+        working-directory: desktop
+        run: npx electron-builder --config electron-builder.yml --win nsis --x64 --publish never
+
+      - name: Check packaged desktop app
+        run: npm --prefix desktop run smoke -- --packaged
+
+      - name: Write Windows checksum
+        run: |
+          $hash = (Get-FileHash release/windows/Nova-windows-x64-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $file = Join-Path $PWD 'release/windows/SHA256SUMS-windows.txt'
+          [System.IO.File]::WriteAllText($file, "$hash  Nova-windows-x64-Setup.exe`n", [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: |
+            release/windows/Nova-windows-x64-Setup.exe
+            release/windows/SHA256SUMS-windows.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
   publish:
     name: Publish Fire TV release
     # Compilation and checks run independently; both must succeed before publishing.
@@ -198,3 +253,30 @@ jobs:
               --generate-notes \
               --latest
           fi
+
+  publish-windows:
+    name: Attach Windows installer to release
+    # Fire TV publishes as soon as its own checks pass; Windows never delays the APK.
+    needs: [windows, publish, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows installer
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-installer
+          path: artifacts
+
+      - name: Verify Windows checksum
+        working-directory: artifacts
+        run: sha256sum --check SHA256SUMS-windows.txt
+
+      - name: Upload Windows release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.release.outputs.version }}
+        run: gh release upload "$TAG" artifacts/Nova-windows-x64-Setup.exe artifacts/SHA256SUMS-windows.txt --clobber

@@ -242,6 +242,12 @@ export function flushSettings() {
 // Web: a refresh or closed tab must not drop the last changes (watch progress, history)
 if (Platform.OS === 'web' && typeof window !== 'undefined') window.addEventListener('pagehide', () => { void flushSettings().catch(() => {}); });
 
+// The desktop host awaits this before closing the window and its local server.
+// This exposes only a save operation; no Node or operating-system APIs enter the renderer.
+if (Platform.OS === 'web' && typeof window !== 'undefined' && process.env.EXPO_PUBLIC_DESKTOP === '1') {
+  (window as Window & { novaFlushSettings?: typeof flushSettings }).novaFlushSettings = flushSettings;
+}
+
 // Changes made in another tab or on another device
 onRemoteChange('settings', (ops) => {
   const shared = ops.filter((op) => (SHARED as string[]).includes(op.path[0]));

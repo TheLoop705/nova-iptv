@@ -45,6 +45,9 @@
     "serve": "node server/index.mjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "windows": "npm --prefix desktop start",
+    "build:windows": "npm --prefix desktop run dist",
+    "test:windows": "npm --prefix desktop run smoke",
     "typecheck": "tsc --noEmit",
     "test:updates": "node --test tests/updates.test.mjs"
   },

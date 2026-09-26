@@ -1,0 +1,31 @@
+appId: com.theloop705.nova
+productName: Nova
+directories:
+  app: ../.desktop/app
+  output: ../release/windows
+asar: true
+beforeBuild: ./before-build.cjs
+files:
+  - desktop/*.mjs
+  - server/index.mjs
+  - dist/**/*
+  - assets/icon.png
+  - package.json
+  - LICENSE
+  - '!node_modules/**/*'
+win:
+  icon: ../assets/icon.png
+  executableName: Nova
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  artifactName: Nova-windows-x64-Setup.exe
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Nova
+  deleteAppDataOnUninstall: false
+  runAfterFinish: false
+publish: null

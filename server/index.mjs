@@ -479,7 +479,7 @@ function serveStatic(req, res, pathname) {
   createReadStream(body).pipe(res);
 }
 
-const server = http.createServer(async (req, res) => {
+export const server = http.createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url, 'http://local');
   let kvKey = null;
   if (pathname.startsWith('/api/kv/')) {

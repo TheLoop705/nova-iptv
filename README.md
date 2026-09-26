@@ -1,6 +1,6 @@
 # Nova IPTV
 
-An IPTV player for **Android TV / Fire TV (APK)**, **iOS (iPhone & iPad)** and the **web**, built from one TypeScript codebase (Expo SDK 57 / React Native 0.86).
+An IPTV player for **Android TV / Fire TV (APK)**, **Windows (x64 installer)**, **iOS (iPhone & iPad)** and the **web**, built from one TypeScript codebase (Expo SDK 57 / React Native 0.86). Windows uses Electron to run the web player with its own bundled local service.
 
 Nova is a player only: it ships no channels. Add your provider's M3U link, an M3U file, or an Xtream Codes login. A built-in demo playlist of public test streams lets you try every screen without a subscription.
 
@@ -76,6 +76,7 @@ Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), r
 | `plugins/withAndroidTV.js` | Config plugin: leanback launcher, TV banner, no touchscreen requirement |
 | `server/index.mjs` | Web server: serves the web build and the `/api/proxy` stream/CORS proxy |
 | `server/mock-xtream.mjs` | Dev-only fake Xtream panel (user `demo` / pass `demo`) |
+| `desktop/` | Windows Electron shell, installer configuration and isolated desktop build dependencies |
 
 ## Development
 
@@ -116,6 +117,28 @@ Every push to `master` runs `.github/workflows/android-release.yml`. Typecheckin
 The APK build targets `:app:assembleRelease`, enables Gradle's build cache and parallel execution, and restores cached Gradle state between runs. It avoids a redundant Gradle `clean` on the fresh runner. Each build also uploads a `firetv-build-profile` artifact containing Gradle task timings for diagnosing remaining bottlenecks. The first build after dependency changes can still take longer while caches warm up.
 
 The workflow restores the update-compatible keystore from the `NOVA_ANDROID_KEYSTORE_BASE64` repository secret. Never commit that keystore or its encoded contents.
+
+The Windows installer builds and runs its desktop checks in parallel. After the Fire TV release is published, a separate job attaches `Nova-windows-x64-Setup.exe` and `SHA256SUMS-windows.txt` to the same release. Windows never blocks publication of the APK.
+
+## Windows
+
+Download **Nova-windows-x64-Setup.exe** from [GitHub Releases](https://github.com/TheLoop705/nova-iptv/releases), run the installer, and open Nova from the Start menu or desktop shortcut. The installer includes everything needed; Node.js and a separate Nova server are not required. Installers are currently unsigned, so Windows may show a SmartScreen warning.
+
+Windows uses the web player's HLS/MP4 and MPEG-TS support, keyboard shortcuts, mouse controls and picture-in-picture. Codec support follows the bundled Chromium player; it does not include the iOS VLC engine. Press **F11** for fullscreen, **Ctrl+K** to search, or **Alt** to reveal the menu. **Help → Get updates** opens the release downloads; installing a newer Windows build preserves saved data. Automatic desktop updates are not implemented yet.
+
+Playlists, credentials, favourites, watch progress and settings are stored on this PC in `%APPDATA%\Nova\nova.db`; caches live in the same Nova data directory. These are separate from any Nova web server's library. The bundled service binds only to a random loopback port and requires a credential held by the desktop process. LAN providers work without extra configuration.
+
+Build on Windows with Node.js 22.12+:
+
+```bash
+npm ci
+npm ci --prefix desktop
+npm run windows         # export the desktop web bundle and launch Nova
+npm run build:windows   # → release/windows/Nova-windows-x64-Setup.exe
+npm run test:windows    # after export: startup, restart persistence, proxy and codec checks
+```
+
+Electron dependencies live in `desktop/package-lock.json` so Android builds do not install the desktop toolchain. The generated desktop app is staged in `.desktop/`; source changes belong in `desktop/`, `server/` or the shared app under `src/`.
 
 ## iOS
 

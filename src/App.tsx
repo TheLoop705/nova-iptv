@@ -140,7 +140,9 @@ function WebStyles() {
     document.head.appendChild(el);
     const font = document.createElement('link');
     font.rel = 'stylesheet';
-    font.href = 'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap';
+    font.href = process.env.EXPO_PUBLIC_DESKTOP === '1'
+      ? '/fonts/figtree.css'
+      : 'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap';
     document.head.appendChild(font);
     return () => {
       el.remove();

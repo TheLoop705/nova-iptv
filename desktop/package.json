@@ -1,0 +1,17 @@
+{
+  "name": "nova-desktop-tools",
+  "version": "0.0.0",
+  "private": true,
+  "main": "main.mjs",
+  "scripts": {
+    "prepare:app": "node ../scripts/build-windows.mjs",
+    "start": "npm run prepare:app && electron .",
+    "dist": "npm run prepare:app && electron-builder --config electron-builder.yml --win nsis --x64 --publish never",
+    "smoke": "node test.mjs"
+  },
+  "devDependencies": {
+    "@fontsource-variable/figtree": "5.3.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  }
+}
