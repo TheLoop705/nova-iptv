@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUI } from '../store/ui';
 import { Layer, useKeys } from '../input/keys';
@@ -7,12 +7,13 @@ import { colors, radius, useLayout } from '../theme';
 import { Focusable } from './Focusable';
 import { Icon } from './Icon';
 
-/** Modal option list (side menu on TV, bottom sheet on phones). */
+/** Modal option list (side menu on TV, bottom sheet on phones, context menu for a web right-click). */
 export function SheetHost() {
   const sheet = useUI((s) => s.sheet);
   const close = useUI((s) => s.closeSheet);
   const { s, mode, type } = useLayout();
   const insets = useSafeAreaInsets();
+  const win = useWindowDimensions();
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
@@ -37,6 +38,64 @@ export function SheetHost() {
 
   if (!sheet) return null;
   const tv = mode === 'tv';
+
+  if (sheet.anchor) {
+    // Context menu at the pointer, kept inside the window
+    const w = s(250);
+    const itemH = s(34);
+    const h = s(40) + sheet.options.length * itemH;
+    const left = Math.max(8, Math.min(sheet.anchor.x, win.width - w - 8));
+    const top = Math.max(8, sheet.anchor.y + h > win.height - 8 ? sheet.anchor.y - h : sheet.anchor.y);
+    return (
+      <View style={StyleSheet.absoluteFill}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={close} focusable={false} {...({ onContextMenu: (e: { preventDefault: () => void }) => (e.preventDefault(), close()) } as object)} />
+        <View
+          style={{
+            position: 'absolute',
+            left,
+            top,
+            width: w,
+            backgroundColor: colors.surface2,
+            borderRadius: s(radius.md),
+            borderWidth: 1,
+            borderColor: colors.borderStrong,
+            paddingVertical: s(5),
+            shadowColor: colors.video,
+            shadowOpacity: 0.5,
+            shadowRadius: 24,
+            shadowOffset: { width: 0, height: 8 },
+          }}
+        >
+          <Text numberOfLines={1} style={[type('caption'), { color: colors.muted, fontWeight: '700', paddingHorizontal: s(12), paddingTop: s(4), paddingBottom: s(6) }]}>
+            {sheet.title}
+          </Text>
+          {sheet.options.map((o, i) => (
+            <Focusable
+              key={o.label + i}
+              focused={i === index}
+              onPress={() => {
+                close();
+                o.onSelect();
+              }}
+              style={{ height: itemH, marginHorizontal: s(5), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(8) }}
+              focusStyle={{ backgroundColor: colors.focus }}
+            >
+              {({ focused }) => (
+                <>
+                  {o.icon ? <Icon name={o.icon} size={s(15)} color={focused ? colors.focusText : o.destructive ? colors.live : colors.textDim} style={{ marginRight: s(10) }} /> : null}
+                  <Text numberOfLines={1} style={[type('label'), { flex: 1, fontWeight: '600', color: focused ? colors.focusText : o.destructive ? colors.live : colors.text }]}>
+                    {o.label}
+                  </Text>
+                  {o.selected ? <Icon name="check" size={s(14)} color={focused ? colors.focusText : colors.accent} /> : null}
+                </>
+              )}
+            </Focusable>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
   const panel = tv
     ? { position: 'absolute' as const, right: 0, top: 0, bottom: 0, width: s(320), paddingTop: s(32), paddingBottom: s(16) }
     : {
@@ -110,6 +169,9 @@ export function SheetHost() {
             </Focusable>
           ))}
         </ScrollView>
+        {tv ? (
+          <Text style={[type('caption'), { color: colors.muted, paddingHorizontal: s(22), paddingTop: s(10) }]}>▲▼ choose · OK select · Back close</Text>
+        ) : null}
       </Animated.View>
     </View>
   );

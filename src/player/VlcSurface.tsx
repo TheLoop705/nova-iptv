@@ -37,7 +37,7 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
   useEffect(() => {
     set({
       engine: 'vlc',
-      caps: { speed: true, mute: true, quality: false, pip: false, airplay: false, fullscreen: false },
+      caps: { speed: true, mute: true, volume: false, quality: false, pip: false, airplay: false, fullscreen: false },
       rate: 1,
       muted: false,
       qualities: [],
@@ -52,6 +52,7 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
           void ref.current?.setMuted(muted);
           set({ muted });
         },
+        setVolume: () => {},
         setQuality: () => {},
         togglePip: () => {},
         toggleFullscreen: () => {},

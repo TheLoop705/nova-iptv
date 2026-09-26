@@ -61,6 +61,10 @@ export const watchId = {
 
 const HISTORY_MAX = 40;
 
+export type CategoryKind = 'live' | 'movies' | 'series';
+/** favourite categories are kept per playlist and per section */
+export const favCatKey = (playlistId: string, kind: CategoryKind) => `${playlistId}:${kind}`;
+
 /** Counts as watched once the remaining time is under 5% (at least the last minute: credits). */
 export const isFinished = (pos: number, dur: number) => dur > 0 && pos >= dur - Math.max(60, dur * 0.05);
 
@@ -77,6 +81,8 @@ interface Persisted {
   recentMovies: Record<string, VodItem[]>;
   /** per playlist, newest first */
   history: Record<string, WatchEntry[]>;
+  /** favourite category ids by favCatKey() */
+  favCategories: Record<string, string[]>;
   prefs: Prefs;
 }
 
@@ -95,6 +101,7 @@ interface SettingsState extends Persisted {
   /** mark a movie/episode as watched (or not) by hand */
   setWatched: (key: string, done: boolean) => void;
   pushHistory: (playlistId: string, entry: WatchEntry) => void;
+  toggleFavCategory: (playlistId: string, kind: CategoryKind, categoryId: string) => void;
   removeHistory: (playlistId: string, id: string) => void;
   toggleVodFavorite: (playlistId: string, fav: VodFav) => void;
   pushRecentMovie: (playlistId: string, item: VodItem) => void;
@@ -113,6 +120,7 @@ const initial: Persisted = {
   vodFavorites: {},
   recentMovies: {},
   history: {},
+  favCategories: {},
   prefs: defaultPrefs,
 };
 
@@ -179,6 +187,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set((s) => ({
       history: { ...s.history, [pid]: [entry, ...(s.history[pid] ?? []).filter((e) => e.id !== entry.id)].slice(0, HISTORY_MAX) },
     })),
+  toggleFavCategory: (pid, kind, id) =>
+    set((s) => {
+      const key = favCatKey(pid, kind);
+      return { favCategories: { ...s.favCategories, [key]: toggle(s.favCategories[key], id) } };
+    }),
   removeHistory: (pid, id) => set((s) => ({ history: { ...s.history, [pid]: (s.history[pid] ?? []).filter((e) => e.id !== id) } })),
   toggleVodFavorite: (pid, fav) =>
     set((s) => {

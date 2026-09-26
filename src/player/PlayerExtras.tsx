@@ -236,6 +236,43 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Volume
+// ---------------------------------------------------------------------------------------------
+
+/** Volume slider next to the Mute button (web): click or drag to set the level; raising it unmutes. */
+export function VolumeSlider({ width, focused }: { width: number; focused: boolean }) {
+  const k = useK();
+  const volume = usePlayback((st) => st.volume);
+  const muted = usePlayback((st) => st.muted);
+  const left = useRef(0);
+  const level = muted ? 0 : volume;
+  const setAt = (x: number) => usePlayback.getState().cmd.setVolume(clamp01(x / width));
+  const fg = focused ? colors.focusText : colors.onVideo;
+  return (
+    <View
+      accessibilityRole="adjustable"
+      accessibilityLabel="Volume"
+      accessibilityValue={{ min: 0, max: 100, now: Math.round(level * 100) }}
+      style={[{ width, height: k(28), justifyContent: 'center', marginLeft: k(10) }, Platform.OS === 'web' ? ({ cursor: 'pointer' } as object) : null]}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(e) => {
+        const { pageX, locationX } = e.nativeEvent;
+        left.current = pageX - locationX;
+        setAt(locationX);
+      }}
+      onResponderMove={(e) => setAt(e.nativeEvent.pageX - left.current)}
+    >
+      <View pointerEvents="none" style={{ height: k(5), borderRadius: 999, backgroundColor: focused ? colors.textDim : 'rgba(255,255,255,0.28)', overflow: 'hidden' }}>
+        <View style={{ width: `${level * 100}%`, height: '100%', backgroundColor: fg }} />
+      </View>
+      <View pointerEvents="none" style={{ position: 'absolute', left: level * width - k(7), width: k(14), height: k(14), borderRadius: k(7), backgroundColor: fg }} />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Notices: reconnecting, tap to unmute, AirPlay, up next
 // ---------------------------------------------------------------------------------------------
 

@@ -12,6 +12,13 @@ import type { Playlist } from '../types';
 import { formatDay, formatClock } from '../utils/format';
 import { DEFAULT_UA } from '../services/http';
 
+/** Distinct titles across categories (the same item can be listed in several). */
+function countUnique(byCategory: Record<string, { id: string }[]>): number {
+  const ids = new Set<string>();
+  for (const list of Object.values(byCategory)) for (const it of list) ids.add(it.id);
+  return ids.size;
+}
+
 type Row =
   | { kind: 'header'; label: string }
   | { kind: 'item'; id: string; label: string; value?: string; icon: string; detail?: string; run: () => void; toggle?: boolean; on?: boolean };
@@ -33,6 +40,16 @@ export function SettingsScreen() {
   const epgFetchedAt = useLibrary((st) => st.epgFetchedAt);
   const epgStatus = useLibrary((st) => st.epgStatus);
   const channelsCount = useLibrary((st) => st.channels.length);
+  const groupsCount = useLibrary((st) => st.groups.length);
+  const guideCount = useLibrary((st) => Object.keys(st.epg).length);
+  const movies = useLibrary((st) => st.movies);
+  const series = useLibrary((st) => st.series);
+  const movieCats = useLibrary((st) => st.movieCats?.length);
+  const seriesCats = useLibrary((st) => st.seriesCats?.length);
+  const vodAllLoaded = useLibrary((st) => st.vodAllLoaded);
+  // Movies and series are listed per category on Xtream: count them from one full listing (shared with search)
+  const movieCount = useMemo(() => countUnique(movies), [movies]);
+  const seriesCount = useMemo(() => countUnique(series), [series]);
   const menuFocused = useUI((st) => st.menuFocused);
   const openSheet = useUI((st) => st.openSheet);
   const openEditor = useUI((st) => st.openEditor);
@@ -44,6 +61,10 @@ export function SettingsScreen() {
   const listRef = useRef<FlatList<Row>>(null);
 
   const active = playlists.find((p) => p.id === activeId) ?? playlists[0];
+  const counting = active?.type === 'xtream' && !vodAllLoaded;
+  useEffect(() => {
+    if (active?.type === 'xtream') void useLibrary.getState().loadAllVod();
+  }, [active?.id, active?.type]);
 
   const playlistSheet = (p: Playlist) =>
     openSheet({
@@ -118,6 +139,36 @@ export function SettingsScreen() {
         run: () => {},
       });
     }
+
+    r.push({ kind: 'header', label: 'Library' });
+    const n = (count: number, one: string, many: string) => `${count.toLocaleString()} ${count === 1 ? one : many}`;
+    r.push({
+      kind: 'item',
+      id: 'lib-live',
+      label: 'Live TV',
+      icon: 'television-classic',
+      value: n(channelsCount, 'channel', 'channels'),
+      detail: `${n(groupsCount, 'category', 'categories')} · ${n(guideCount, 'channel', 'channels')} with TV guide`,
+      run: () => useUI.getState().setScreen('guide'),
+    });
+    r.push({
+      kind: 'item',
+      id: 'lib-movies',
+      label: 'Movies',
+      icon: 'movie-open-outline',
+      value: counting ? 'Counting…' : n(movieCount, 'movie', 'movies'),
+      detail: movieCats ? n(movieCats, 'category', 'categories') : undefined,
+      run: () => useUI.getState().setScreen('movies'),
+    });
+    r.push({
+      kind: 'item',
+      id: 'lib-series',
+      label: 'Series',
+      icon: 'television-play',
+      value: counting ? 'Counting…' : n(seriesCount, 'series', 'series'),
+      detail: seriesCats ? n(seriesCats, 'category', 'categories') : undefined,
+      run: () => useUI.getState().setScreen('series'),
+    });
 
     r.push({ kind: 'header', label: 'TV Guide' });
     r.push({
@@ -197,7 +248,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount]);
+  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;

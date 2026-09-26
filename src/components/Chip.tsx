@@ -1,15 +1,31 @@
+import { contextMenuProps } from '../utils/contextMenu';
 import React from 'react';
 import { Pressable, Text } from 'react-native';
 import { colors, radius, useLayout } from '../theme';
 import { Icon } from './Icon';
 
 /** Filter chip for touch layouts (guide groups, VOD categories). Selected = accent fill. */
-export function Chip({ label, icon, selected, onPress }: { label: string; icon?: string; selected?: boolean; onPress: () => void }) {
+export function Chip({
+  label,
+  icon,
+  selected,
+  onPress,
+  onLongPress,
+}: {
+  label: string;
+  icon?: string;
+  selected?: boolean;
+  onPress: () => void;
+  /** long-press / right-click: the item's menu */
+  onLongPress?: () => void;
+}) {
   const { k, type } = useLayout();
   return (
     <Pressable
       focusable={false}
       onPress={onPress}
+      onLongPress={onLongPress}
+      {...contextMenuProps(onLongPress && (() => onLongPress()))}
       hitSlop={{ top: 6, bottom: 6 }}
       accessibilityRole="button"
       accessibilityState={{ selected: !!selected }}

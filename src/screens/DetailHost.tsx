@@ -6,7 +6,7 @@ import type { Episode, MovieInfo, SeriesInfo, SeriesItem, VodItem } from '../typ
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
-import { useUI } from '../store/ui';
+import { useUI, type MenuAnchor } from '../store/ui';
 import { useSettings } from '../store/settings';
 import { useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
@@ -188,10 +188,11 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const seasons = info?.seasons ?? [];
   const episodes = seasons[season]?.episodes ?? [];
 
-  const episodeSheet = (e: Episode) => {
+  const episodeSheet = (e: Episode, anchor?: MenuAnchor) => {
     const pr = progress[episodeKey(e)];
     const resume = pr && pr.pos > 0;
     openSheet({
+      anchor,
       title: `S${e.season} E${e.episode} · ${e.title}`,
       subtitle: item.name,
       options: [
@@ -324,6 +325,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     playEpisode(item, e);
                   }}
                   onLongPress={() => episodeSheet(e)}
+                  onContextMenu={(anchor) => episodeSheet(e, anchor)}
                   style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >

@@ -117,6 +117,8 @@ export interface Group {
   name: string;
   channelIds: string[];
   virtual?: boolean;
+  /** a favourite category: sorted to the top */
+  favorite?: boolean;
 }
 
 export type PlayItem =

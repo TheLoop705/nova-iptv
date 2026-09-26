@@ -28,6 +28,17 @@ function enginesFor(uri: string, video: HTMLVideoElement): Engine[] {
   return [...ts, ...hls, 'native'];
 }
 
+// The volume is remembered per browser (TVs and phones use their own volume keys)
+const VOLUME_KEY = 'nova.volume';
+function savedVolume(): number {
+  try {
+    const v = Number(localStorage.getItem(VOLUME_KEY));
+    return localStorage.getItem(VOLUME_KEY) !== null && isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+  } catch {
+    return 1;
+  }
+}
+
 /** Browser playback: hls.js for HLS, mpegts.js for raw MPEG-TS, <video> for everything else. */
 export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
   const fit = usePlayback((s) => s.fit);
@@ -41,9 +52,11 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
     const doc = typeof document !== 'undefined' ? (document as any) : null;
     set({
       engine: 'web',
+      volume: savedVolume(),
       caps: {
         speed: true,
         mute: true,
+        volume: true,
         quality: false,
         pip: !!doc?.pictureInPictureEnabled,
         airplay: false,
@@ -78,6 +91,20 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
           if (videoRef.current) videoRef.current.muted = muted;
           set({ muted });
         },
+        setVolume: (value) => {
+          const volume = Math.round(Math.min(1, Math.max(0, value)) * 100) / 100;
+          const v = videoRef.current;
+          if (v) {
+            v.volume = volume;
+            if (volume > 0 && v.muted) v.muted = false;
+          }
+          set({ volume, muted: v ? v.muted : usePlayback.getState().muted });
+          try {
+            localStorage.setItem(VOLUME_KEY, String(volume));
+          } catch {
+            // private mode: just not remembered
+          }
+        },
         setQuality: (i) => {
           const hls = hlsRef.current;
           if (!hls) return;
@@ -106,6 +133,7 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    v.volume = savedVolume();
     const on = (ev: string, fn: () => void) => {
       v.addEventListener(ev, fn);
       return () => v.removeEventListener(ev, fn);
@@ -122,7 +150,7 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         set({ position: v.currentTime, duration: isFinite(v.duration) ? v.duration : 0, status });
       }),
       on('durationchange', () => set({ duration: isFinite(v.duration) ? v.duration : 0 })),
-      on('volumechange', () => set({ muted: v.muted })),
+      on('volumechange', () => set({ muted: v.muted, volume: v.volume })),
       on('ratechange', () => set({ rate: v.playbackRate })),
       on('enterpictureinpicture', () => set({ pip: true })),
       on('leavepictureinpicture', () => set({ pip: false })),

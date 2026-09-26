@@ -16,6 +16,13 @@ export interface Sheet {
   title: string;
   subtitle?: string;
   options: SheetOption[];
+  /** web right-click: show as a context menu at this window position instead of a side panel */
+  anchor?: MenuAnchor;
+}
+
+export interface MenuAnchor {
+  x: number;
+  y: number;
 }
 
 export type Detail = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };

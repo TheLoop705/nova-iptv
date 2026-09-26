@@ -2,6 +2,8 @@ import React, { memo, type ReactNode } from 'react';
 import { Pressable, type StyleProp, type ViewStyle, Platform } from 'react-native';
 import { useKeyMode } from '../input/keys';
 import { colors } from '../theme';
+import { contextMenuProps } from '../utils/contextMenu';
+import type { MenuAnchor } from '../store/ui';
 
 const DEFAULT_HOVER: ViewStyle = { backgroundColor: colors.hover };
 
@@ -9,6 +11,8 @@ interface Props {
   focused?: boolean;
   onPress?: () => void;
   onLongPress?: () => void;
+  /** web right-click (TV/phones use Menu / long-press for the same menu) */
+  onContextMenu?: (anchor: MenuAnchor) => void;
   onHoverIn?: () => void;
   style?: StyleProp<ViewStyle>;
   focusStyle?: StyleProp<ViewStyle>;
@@ -30,6 +34,7 @@ export const Focusable = memo(function Focusable({
   focused = false,
   onPress,
   onLongPress,
+  onContextMenu,
   onHoverIn,
   style,
   focusStyle,
@@ -46,6 +51,7 @@ export const Focusable = memo(function Focusable({
       focusable={false}
       onPress={onPress}
       onLongPress={onLongPress}
+      {...contextMenuProps(onContextMenu)}
       onHoverIn={onHoverIn}
       delayLongPress={450}
       testID={testID}

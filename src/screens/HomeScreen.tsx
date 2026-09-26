@@ -6,7 +6,7 @@ import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary, ALL } from '../store/library';
 import { useActivePlaylist, useSettings, watchId, type VodProgress, type WatchEntry } from '../store/settings';
 import { usePlayer } from '../store/player';
-import { useUI, type SheetOption } from '../store/ui';
+import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
 import { Layer, useKeys } from '../input/keys';
 import { programAt } from '../services/epg';
 import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
@@ -87,13 +87,13 @@ export function HomeScreen() {
   }, []);
 
   const openOptions = useCallback(
-    (e: WatchEntry) => {
+    (e: WatchEntry, anchor?: MenuAnchor) => {
       const ui = useUI.getState();
       const st = useSettings.getState();
       const remove: SheetOption = { label: 'Remove from recently watched', icon: 'close-circle-outline', onSelect: () => pid && st.removeHistory(pid, e.id) };
       if (e.kind === 'live') {
         const ch = byId[e.channelId];
-        return ui.openSheet({ title: ch ? `${ch.num}  ${ch.name}` : 'Channel', options: [{ label: 'Watch', icon: 'play-circle-outline', onSelect: () => play(e) }, remove] });
+        return ui.openSheet({ anchor, title: ch ? `${ch.num}  ${ch.name}` : 'Channel', options: [{ label: 'Watch', icon: 'play-circle-outline', onSelect: () => play(e) }, remove] });
       }
       const key = e.kind === 'movie' ? movieKey(e.item) : episodeKey(e.episode);
       const pr = st.vodProgress[key];
@@ -103,6 +103,7 @@ export function HomeScreen() {
         : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) };
       if (e.kind === 'movie') {
         return ui.openSheet({
+          anchor,
           title: e.item.name,
           subtitle: e.item.year,
           options: [
@@ -116,6 +117,7 @@ export function HomeScreen() {
       }
       const ep = e.episode;
       return ui.openSheet({
+        anchor,
         title: e.series.name,
         subtitle: `S${ep.season} E${ep.episode} · ${ep.title}`,
         options: [
@@ -224,7 +226,7 @@ export function HomeScreen() {
                   setCol(ci);
                   play(e);
                 }}
-                onLongPress={() => openOptions(e)}
+                onLongPress={(anchor) => openOptions(e, anchor)}
               />
             )}
           />
@@ -259,7 +261,7 @@ function WatchCard({
   tv: boolean;
   k: (n: number) => number;
   onPress: () => void;
-  onLongPress: () => void;
+  onLongPress: (anchor?: MenuAnchor) => void;
 }) {
   const imgH = Math.round((width * 9) / 16);
   let image: string | undefined;
@@ -300,7 +302,8 @@ function WatchCard({
     <Focusable
       focused={focused}
       onPress={onPress}
-      onLongPress={onLongPress}
+      onLongPress={() => onLongPress()}
+      onContextMenu={onLongPress}
       accessibilityLabel={title}
       style={{ width, borderRadius: radius.md, padding: 0 }}
       hoverStyle={{ transform: [{ scale: 1.03 }] }}

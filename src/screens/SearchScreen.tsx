@@ -107,15 +107,18 @@ export function SearchScreen() {
     const words = queryWords(q.trim());
     if (q.trim().length < 2 || !words.length) return [];
     const now = Date.now();
-    const scored: { r: Result; score: number; kind: number }[] = [];
+    // `dup`: providers list the same channel/movie in several categories under different IDs
+    const scored: { r: Result; score: number; kind: number; dup: string }[] = [];
     let cCount = 0;
     for (const c of channels) {
-      const score = matchScore(words, compactTitle(c.name));
+      const title = compactTitle(c.name);
+      const score = matchScore(words, title);
       if (!score) continue;
       const p = programAt(epg[c.id], now);
       scored.push({
         score,
         kind: 0,
+        dup: 'c:' + title,
         r: {
           key: 'c' + c.id,
           type: 'channel',
@@ -125,34 +128,38 @@ export function SearchScreen() {
           run: () => playChannel(c.id, { groupId: 'all', fullscreen: true }),
         },
       });
-      if (++cCount >= 80) break;
+      if (++cCount >= 150) break;
     }
     const seen = new Set<string>();
     let mCount = 0;
     for (const list of Object.values(movies)) {
       for (const m of list as VodItem[]) {
-        if (mCount >= 60 || seen.has(m.id)) continue;
-        const score = matchScore(words, compactTitle(m.name));
+        if (mCount >= 120 || seen.has(m.id)) continue;
+        const title = compactTitle(m.name);
+        const score = matchScore(words, title);
         if (!score) continue;
         seen.add(m.id);
         mCount++;
-        scored.push({ score, kind: 1, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
+        scored.push({ score, kind: 1, dup: `m:${title}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
       }
     }
     let sCount = 0;
     for (const list of Object.values(series)) {
       for (const sr of list as SeriesItem[]) {
-        if (sCount >= 60 || seen.has(sr.id)) continue;
-        const score = matchScore(words, compactTitle(sr.name));
+        if (sCount >= 120 || seen.has(sr.id)) continue;
+        const title = compactTitle(sr.name);
+        const score = matchScore(words, title);
         if (!score) continue;
         seen.add(sr.id);
         sCount++;
-        scored.push({ score, kind: 2, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
+        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
       }
     }
     // Best matches first; channels before movies before series on ties
     scored.sort((a, b) => b.score - a.score || a.kind - b.kind);
-    return scored.map((x) => x.r);
+    // One result per title (and year): the best-ranked copy wins
+    const unique = new Set<string>();
+    return scored.filter((x) => !unique.has(x.dup) && unique.add(x.dup)).map((x) => x.r);
   }, [q, channels, movies, series, epg, playChannel, setDetail]);
 
   useEffect(() => setIdx(0), [q]);

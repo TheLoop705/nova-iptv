@@ -1,6 +1,6 @@
 # Nova IPTV
 
-A TiviMate-style IPTV player for **Android TV / Fire TV (APK)**, **iOS (iPhone & iPad)** and the **web**, built from one TypeScript codebase (Expo SDK 57 / React Native 0.86).
+An IPTV player for **Android TV / Fire TV (APK)**, **iOS (iPhone & iPad)** and the **web**, built from one TypeScript codebase (Expo SDK 57 / React Native 0.86).
 
 Nova is a player only: it ships no channels. Add your provider's M3U link, an M3U file, or an Xtream Codes login. A built-in demo playlist of public test streams lets you try every screen without a subscription.
 
@@ -14,9 +14,28 @@ https://github.com/TheLoop705/nova-iptv/releases/latest/download/Nova-firetv.apk
 
 All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/releases) page.
 
+## Screenshots
+
+| Home | Live TV |
+| --- | --- |
+| ![Home: recently watched with progress, favorite channels](docs/screenshots/home.png) | ![Live TV: categories, channels with what's on now, and the guide grid](docs/screenshots/live-tv.png) |
+| **Player** | **Series** |
+| ![Player: controls, seek bar with time preview](docs/screenshots/player.png) | ![Series: watched and in-progress episodes](docs/screenshots/series.png) |
+| **Movie** | **Movies** |
+| ![Movie details with resume and watched state](docs/screenshots/movie.png) | ![Movie categories and poster grid](docs/screenshots/movies.png) |
+
+<p>
+  <img src="docs/screenshots/phone-home.png" width="260" alt="Home on a phone">
+  <img src="docs/screenshots/phone-live.png" width="260" alt="Live TV on a phone">
+</p>
+
 ## Features
 
-- **TV guide (EPG grid)** in the TiviMate layout: programme details and live preview on top, a channel/timeline grid below, a now-line, group panel, and number-key channel entry.
+- **Home**: *Recently watched* mixes live channels, movies and series episodes, newest first, with where you left off. Selecting a series continues it (the next episode once one is finished). *Favorite channels* sits below.
+- **Watch progress** for every movie and episode: resume points, "12 min left", and a *Watched* mark once finished (or set by hand). It's kept when the page reloads, and on the web it's shared between browsers through the Nova server.
+- **Live TV guide (EPG grid)**: categories, channels with what's on now, and the timeline grid side by side, with a slim programme strip and live preview on top, a now-line, and number-key channel entry.
+- **Favorite categories**: star any Live TV, movie or series category from its menu and it moves to the top of the list.
+- **Menus everywhere**: Menu or long-press OK on the remote, long-press on touch, and a right-click context menu on the web. Channels, programmes, categories, posters, Home cards and episodes each have one.
 - **Playlists**: M3U/M3U8 URL, M3U file import, Xtream Codes (live, movies, series, account info). Multiple playlists with fast switching.
 - **XMLTV guides**: streamed and parsed incrementally (gzip supported). The guide URL is auto-detected from `url-tvg`/`x-tvg-url`, or uses Xtream's `xmltv.php`. There's a per-channel fallback via `get_simple_data_table`.
 - **Catch-up**: Xtream `timeshift` and M3U `catchup` types (`default`, `append`, `shift`, `flussonic`, `fs`).
@@ -34,7 +53,7 @@ Each platform follows its own conventions:
 | --- | --- | --- | --- |
 | Engine | ExoPlayer (Media3) | AVPlayer for HLS/MP4, VLC for MKV/AVI/TS + automatic fallback | hls.js / mpegts.js / `<video>` |
 | System integration | Media session → Alexa voice transport controls ("Alexa, pause / rewind"), Bluetooth/HDMI-CEC media keys | Lock screen & Control Center (Now Playing), AirPlay, Picture in Picture (auto when leaving the app) | Media Session API (OS media overlay, hardware media keys; next/previous = channel zapping), Picture in Picture, true browser fullscreen |
-| Controls | D-pad, remote play/pause/FF/RW (10 s, hold to accelerate), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, YouTube keyboard shortcuts, idle cursor hides |
+| Controls | D-pad, remote play/pause/FF/RW (10 s, hold to accelerate), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, volume slider, YouTube keyboard shortcuts; moving the mouse shows the cursor and controls, which hide again when idle |
 
 Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, "Up next" episode countdown, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
 
@@ -42,7 +61,7 @@ Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), r
 
 | Path | What it is |
 | --- | --- |
-| `src/screens/` | Guide, player overlay host, movies/series, search, settings, playlist editor |
+| `src/screens/` | Home, guide, movies/series, details, search, settings, playlist editor |
 | `src/player/` | `VideoLayer` (one surface that moves between preview and fullscreen), `VideoSurface.tsx` (expo-video: ExoPlayer/AVPlayer), `VideoSurface.web.tsx` (hls.js + mpegts.js), `PlayerOverlay` |
 | `src/services/` | M3U parser, Xtream client, streaming XMLTV parser, catch-up URL builders, storage, HTTP |
 | `src/input/` | Key router: web keyboard, Android remote, Back button → one focus model |
@@ -61,7 +80,7 @@ npm run web            # terminal 2: Expo web on :8081 (uses the proxy)
 npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
 
-Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` = search, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture.
+Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` or Ctrl+K / ⌘K = search, right-click = context menu, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture, `+`/`-` volume.
 
 ## Android TV / Fire TV APK
 

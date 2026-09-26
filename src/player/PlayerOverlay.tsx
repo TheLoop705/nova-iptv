@@ -17,7 +17,7 @@ import { useNow } from '../utils/hooks';
 import { Icon } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
-import { PlayerGestures, PlayerNotices, SeekBar, TOUCH_MIN } from './PlayerExtras';
+import { PlayerGestures, PlayerNotices, SeekBar, TOUCH_MIN, VolumeSlider } from './PlayerExtras';
 import { SPEEDS } from './playback';
 import { playNextItem } from '../services/vod';
 import type { Channel } from '../types';
@@ -72,6 +72,7 @@ export function PlayerOverlay() {
   const caps = usePlayback((st) => st.caps);
   const rate = usePlayback((st) => st.rate);
   const muted = usePlayback((st) => st.muted);
+  const volume = usePlayback((st) => st.volume);
   const qualities = usePlayback((st) => st.qualities);
   const qualityIndex = usePlayback((st) => st.qualityIndex);
   const autoQuality = usePlayback((st) => st.autoQuality);
@@ -360,6 +361,12 @@ export function PlayerOverlay() {
     }
     // standard player shortcuts (web keyboard / remotes with dedicated keys)
     if (e.key === 'mute') return cmd.setMuted(!usePlayback.getState().muted);
+    if (e.key === 'volup' || e.key === 'voldown') {
+      if (!caps.volume) return;
+      const pb = usePlayback.getState();
+      poke();
+      return cmd.setVolume((pb.muted ? 0 : pb.volume) + (e.key === 'volup' ? 0.1 : -0.1));
+    }
     if (e.key === 'fullscreen') return cmd.toggleFullscreen();
     if (e.key === 'pip') return cmd.togglePip();
     if (e.key === 'captions') return cycleCaptions();
@@ -535,26 +542,47 @@ export function PlayerOverlay() {
             )}
 
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(16) }}>
-              {controls.map((c, i) => (
-                <Focusable
-                  key={c.id}
-                  focused={row === 'controls' && i === ctrl}
-                  onPress={() => {
-                    setCtrl(i);
-                    runControl(c.id);
-                  }}
-                  style={{ flexDirection: 'row', alignItems: 'center', height: tv ? Math.max(k(40), TOUCH_MIN) : 48, paddingHorizontal: k(16), borderRadius: radius.pill, backgroundColor: colors.glass }}
-                  hoverStyle={{ backgroundColor: 'rgba(255,255,255,0.24)' }}
-                  focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.05 }] }}
-                >
-                  {({ focused }) => (
-                    <>
-                      <Icon name={c.icon} size={k(20)} color={focused ? colors.focusText : c.active ? colors.star : colors.onVideo} />
-                      <Text style={{ color: focused ? colors.focusText : colors.onVideo, fontSize: k(15), fontWeight: '700', marginLeft: k(8) }}>{c.label}</Text>
-                    </>
-                  )}
-                </Focusable>
-              ))}
+              {controls.map((c, i) => {
+                const pill = (
+                  <Focusable
+                    key={c.id}
+                    focused={row === 'controls' && i === ctrl}
+                    onPress={() => {
+                      setCtrl(i);
+                      runControl(c.id);
+                    }}
+                    style={{ flexDirection: 'row', alignItems: 'center', height: tv ? Math.max(k(40), TOUCH_MIN) : 48, paddingHorizontal: k(16), borderRadius: radius.pill, backgroundColor: colors.glass }}
+                    hoverStyle={{ backgroundColor: 'rgba(255,255,255,0.24)' }}
+                    focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.05 }] }}
+                  >
+                    {({ focused }) => (
+                      <>
+                        <Icon name={c.icon} size={k(20)} color={focused ? colors.focusText : c.active ? colors.star : colors.onVideo} />
+                        <Text
+                          style={[
+                            { color: focused ? colors.focusText : colors.onVideo, fontSize: k(15), fontWeight: '700', marginLeft: k(8), fontVariant: ['tabular-nums'] },
+                            // fixed width so the slider beside it doesn't shift while the level changes
+                            c.id === 'mute' && caps.volume ? { minWidth: k(44), textAlign: 'right' } : null,
+                          ]}
+                        >
+                          {c.id === 'mute' && caps.volume ? (muted ? 'Off' : `${Math.round(volume * 100)}%`) : c.label}
+                        </Text>
+                      </>
+                    )}
+                  </Focusable>
+                );
+                if (c.id !== 'mute' || !caps.volume) return pill;
+                // Mute button + volume slider side by side: the slider isn't inside the button, so
+                // dragging it never toggles mute
+                return (
+                  <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: k(4) }}>
+                    {pill}
+                    <View style={{ height: tv ? Math.max(k(40), TOUCH_MIN) : 48, justifyContent: 'center', paddingLeft: k(6), paddingRight: k(16), borderRadius: radius.pill, backgroundColor: colors.glass }}>
+                      <VolumeSlider width={k(110)} focused={false} />
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           </View>
         </>

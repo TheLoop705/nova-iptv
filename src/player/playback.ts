@@ -18,6 +18,8 @@ export interface PlaybackCommands {
   setSubtitle: (index: number) => void;
   setRate: (rate: number) => void;
   setMuted: (muted: boolean) => void;
+  /** 0–1; raising it above 0 also unmutes */
+  setVolume: (volume: number) => void;
   /** index into `qualities`, -1 = automatic (ABR) */
   setQuality: (index: number) => void;
   togglePip: () => void;
@@ -29,13 +31,15 @@ export interface PlaybackCommands {
 export interface Capabilities {
   speed: boolean;
   mute: boolean;
+  /** an in-app volume slider (web); TVs and phones use their own volume keys */
+  volume: boolean;
   quality: boolean;
   pip: boolean;
   airplay: boolean;
   fullscreen: boolean;
 }
 
-export const NO_CAPS: Capabilities = { speed: false, mute: false, quality: false, pip: false, airplay: false, fullscreen: false };
+export const NO_CAPS: Capabilities = { speed: false, mute: false, volume: false, quality: false, pip: false, airplay: false, fullscreen: false };
 
 export const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -51,6 +55,8 @@ interface PlaybackState {
   fit: Fit;
   rate: number;
   muted: boolean;
+  /** 0–1 */
+  volume: number;
   qualities: Track[];
   /** -1 = automatic */
   qualityIndex: number;
@@ -79,6 +85,7 @@ export const usePlayback = create<PlaybackState>((set) => ({
   fit: 'contain',
   rate: 1,
   muted: false,
+  volume: 1,
   qualities: [],
   qualityIndex: -1,
   pip: false,
@@ -94,6 +101,7 @@ export const usePlayback = create<PlaybackState>((set) => ({
     setSubtitle: noop,
     setRate: noop,
     setMuted: noop,
+    setVolume: noop,
     setQuality: noop,
     togglePip: noop,
     toggleFullscreen: noop,

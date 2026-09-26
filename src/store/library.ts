@@ -25,7 +25,7 @@ import {
   demoSeriesCats,
 } from '../services/demo';
 import { normalizeName } from '../utils/format';
-import { useSettings } from './settings';
+import { favCatKey, useSettings } from './settings';
 
 interface PlaylistCache {
   channels: Channel[];
@@ -381,8 +381,9 @@ export function useAllGroups(): Group[] {
   const favs = useSettings((s) => (pid ? s.favorites[pid] : undefined));
   const recents = useSettings((s) => (pid ? s.recents[pid] : undefined));
   const hidden = useSettings((s) => (pid ? s.hiddenGroups[pid] : undefined));
+  const favCats = useSettings((s) => (pid ? s.favCategories[favCatKey(pid, 'live')] : undefined));
   const channels = useLibrary((s) => s.channels);
-  return useMemoGroups(groups, byId, channels, favs, recents, hidden);
+  return useMemoGroups(groups, byId, channels, favs, recents, hidden, favCats);
 }
 
 let memo: { key: unknown[]; value: Group[] } | null = null;
@@ -392,9 +393,10 @@ function useMemoGroups(
   channels: Channel[],
   favs?: string[],
   recents?: string[],
-  hidden?: string[]
+  hidden?: string[],
+  favCats?: string[]
 ): Group[] {
-  const key = [groups, byId, channels, favs, recents, hidden];
+  const key = [groups, byId, channels, favs, recents, hidden, favCats];
   if (memo && memo.key.every((k, i) => k === key[i])) return memo.value;
   const out: Group[] = [];
   const fav = (favs ?? []).filter((id) => byId[id]);
@@ -403,7 +405,10 @@ function useMemoGroups(
   if (rec.length) out.push({ id: RECENT, name: 'Recently watched', channelIds: rec, virtual: true });
   out.push({ id: ALL, name: 'All channels', channelIds: channels.map((c) => c.id), virtual: true });
   const hide = new Set(hidden ?? []);
-  for (const g of groups) if (!hide.has(g.id)) out.push(g);
+  // favourite categories right after the built-in ones, in playlist order
+  const favCat = new Set(favCats ?? []);
+  for (const g of groups) if (!hide.has(g.id) && favCat.has(g.id)) out.push({ ...g, favorite: true });
+  for (const g of groups) if (!hide.has(g.id) && !favCat.has(g.id)) out.push(g);
   memo = { key, value: out };
   return out;
 }

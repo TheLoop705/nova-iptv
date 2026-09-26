@@ -4,13 +4,14 @@ import type { SeriesItem, VodItem } from '../types';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
 import { useLibrary } from '../store/library';
-import { useSettings } from '../store/settings';
-import { useUI } from '../store/ui';
+import { favCatKey, useSettings } from '../store/settings';
+import { useUI, type MenuAnchor } from '../store/ui';
 import { useKeys, type KeyEvt } from '../input/keys';
 import { Poster } from '../components/Logo';
 import { Focusable } from '../components/Focusable';
 import { Icon } from '../components/Icon';
-import { movieKey } from '../services/vod';
+import { movieKey, playMovie } from '../services/vod';
+import { formatDuration } from '../utils/format';
 
 type Item = VodItem | SeriesItem;
 const RECENT = '__recent';
@@ -28,8 +29,10 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
   const recent = useSettings((st) => (pid ? st.recentMovies[pid] : undefined));
   const progress = useSettings((st) => st.vodProgress);
+  const favCats = useSettings((st) => (pid ? st.favCategories[favCatKey(pid, kind)] : undefined));
   const menuFocused = useUI((st) => st.menuFocused);
   const detail = useUI((st) => st.detail);
+  const sheetOpen = useUI((st) => !!st.sheet);
   const setDetail = useUI((st) => st.setDetail);
 
   useEffect(() => {
@@ -37,14 +40,16 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   }, [pid, loadCats]);
 
   const favItems = useMemo(() => (favs ?? []).filter((f) => (kind === 'movies' ? f.kind === 'movie' : f.kind === 'series')).map((f) => f.item), [favs, kind]);
-  const allCats = useMemo(
-    () => [
+  // built-in lists, then favourite categories (starred), then the rest in playlist order
+  const allCats = useMemo(() => {
+    const fav = new Set(favCats ?? []);
+    return [
       ...(kind === 'movies' && recent?.length ? [{ id: RECENT, name: 'Recently watched' }] : []),
       ...(favItems.length ? [{ id: FAVS, name: 'Favorites' }] : []),
-      ...(cats ?? []),
-    ],
-    [kind, recent?.length, favItems.length, cats]
-  );
+      ...(cats ?? []).filter((c) => fav.has(c.id)).map((c) => ({ ...c, favorite: true })),
+      ...(cats ?? []).filter((c) => !fav.has(c.id)),
+    ] as { id: string; name: string; favorite?: boolean }[];
+  }, [kind, recent?.length, favItems.length, cats, favCats]);
 
   const [catIndex, setCatIndex] = useState(0);
   const [selected, setSelected] = useState<string | undefined>();
@@ -59,6 +64,17 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
     setCatIndex(idx);
     setSelected(allCats[idx].id);
   }, [allCats, selected]);
+
+  // Starring a category reorders the list: keep the cursor on the same category, so the pause-to-select
+  // below doesn't pick whatever moved into its slot
+  const prevCats = useRef(allCats);
+  useEffect(() => {
+    if (prevCats.current === allCats) return;
+    const id = prevCats.current[catIndex]?.id;
+    prevCats.current = allCats;
+    const i = allCats.findIndex((c) => c.id === id);
+    if (i >= 0 && i !== catIndex) setCatIndex(i);
+  }, [allCats, catIndex]);
 
   // key browsing through categories selects them after a short pause
   useEffect(() => {
@@ -108,6 +124,50 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
 
   const open = (it: Item) => setDetail(kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem });
 
+  // Menus: Menu / long-press on TV and phones, right-click on the web
+  const catSheet = (c: (typeof allCats)[number] | undefined, anchor?: MenuAnchor) => {
+    if (!c || !pid || c.id === RECENT || c.id === FAVS) return;
+    const st = useSettings.getState();
+    useUI.getState().openSheet({
+      anchor,
+      title: c.name,
+      options: [
+        c.favorite
+          ? { label: 'Remove from favorite categories', icon: 'star-off-outline', onSelect: () => st.toggleFavCategory(pid, kind, c.id) }
+          : { label: 'Add to favorite categories', icon: 'star-outline', onSelect: () => st.toggleFavCategory(pid, kind, c.id) },
+      ],
+    });
+  };
+  const itemSheet = (it: Item | undefined, anchor?: MenuAnchor) => {
+    if (!it || !pid) return;
+    const st = useSettings.getState();
+    const isFav = (favs ?? []).some((f) => f.item.id === it.id);
+    const favOption = {
+      label: isFav ? 'Remove from favorites' : 'Add to favorites',
+      icon: isFav ? 'star-off-outline' : 'star-outline',
+      onSelect: () => st.toggleVodFavorite(pid, kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem }),
+    };
+    if (kind === 'series') {
+      return useUI.getState().openSheet({ anchor, title: it.name, options: [{ label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => open(it) }, favOption] });
+    }
+    const key = movieKey(it as VodItem);
+    const pr = st.vodProgress[key];
+    const resume = pr && pr.pos > 0;
+    useUI.getState().openSheet({
+      anchor,
+      title: it.name,
+      options: [
+        { label: resume ? `Resume ${formatDuration(pr.pos)}` : 'Play', icon: 'play', onSelect: () => playMovie(it as VodItem) },
+        ...(resume ? [{ label: 'Play from the beginning', icon: 'restart', onSelect: () => playMovie(it as VodItem, true) }] : []),
+        { label: 'Details', icon: 'information-outline', onSelect: () => open(it) },
+        favOption,
+        pr?.done
+          ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => st.setWatched(key, false) }
+          : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) },
+      ],
+    });
+  };
+
   const onKey = (e: KeyEvt): boolean | void => {
     if (zone === 'cats') {
       switch (e.key) {
@@ -115,8 +175,11 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
           return setCatIndex((i) => Math.max(0, i - 1));
         case 'down':
           return setCatIndex((i) => Math.min(allCats.length - 1, i + 1));
+        case 'menu':
+          return catSheet(allCats[catIndex]);
         case 'right':
         case 'select':
+          if (e.long) return catSheet(allCats[catIndex]);
           if (allCats[catIndex]?.id !== selected) {
             setSelected(allCats[catIndex]?.id);
             setGi(0);
@@ -146,15 +209,17 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
       case 'chdown':
         return setGi(Math.min(n - 1, gi + cols * 3));
       case 'select':
-        if (items[gi]) open(items[gi]);
+        if (items[gi]) return e.long ? itemSheet(items[gi]) : open(items[gi]);
         return;
+      case 'menu':
+        return itemSheet(items[gi]);
       case 'back':
         return setZone('cats');
       default:
         return;
     }
   };
-  useKeys(onKey, !menuFocused && !detail);
+  useKeys(onKey, !menuFocused && !detail && !sheetOpen);
 
   const title = kind === 'movies' ? 'Movies' : 'Series';
 
@@ -184,13 +249,20 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
                   setSelected(c.id);
                   setGi(0);
                 }}
+                onLongPress={() => catSheet(c)}
+                onContextMenu={(anchor) => catSheet(c, anchor)}
                 style={{ height: catH - s(2), borderRadius: s(radius.sm), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center', backgroundColor: c.id === selected ? colors.accentSoft : 'transparent' }}
                 focusStyle={{ backgroundColor: colors.focus }}
               >
                 {({ focused }) => (
                   <>
-                    {c.id === RECENT || c.id === FAVS ? (
-                      <Icon name={c.id === RECENT ? 'history' : 'star'} size={s(13)} color={focused ? colors.focusText : c.id === RECENT ? colors.accent : colors.star} style={{ marginRight: s(7) }} />
+                    {c.id === RECENT || c.id === FAVS || c.favorite ? (
+                      <Icon
+                        name={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : 'folder-star'}
+                        size={s(13)}
+                        color={focused ? colors.focusText : c.id === RECENT ? colors.accent : colors.star}
+                        style={{ marginRight: s(7) }}
+                      />
                     ) : null}
                     <Text numberOfLines={1} style={{ flex: 1, color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }}>
                       {c.name}
@@ -206,12 +278,13 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
               <Chip
                 key={c.id}
                 label={c.name}
-                icon={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : undefined}
+                icon={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : c.favorite ? 'folder-star' : undefined}
                 selected={c.id === selected}
                 onPress={() => {
                   setSelected(c.id);
                   setGi(0);
                 }}
+                onLongPress={c.id === RECENT || c.id === FAVS ? undefined : () => catSheet(c)}
               />
             ))}
           </ScrollView>
@@ -258,6 +331,10 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
                           setZone('grid');
                           open(it);
                         }}
+                        onMenu={(anchor) => {
+                          setGi(idx);
+                          itemSheet(it, anchor);
+                        }}
                       />
                     );
                   })}
@@ -280,12 +357,14 @@ const PosterCard = React.memo(function PosterCard({
   tv,
   s,
   onPress,
+  onMenu,
 }: {
   item: Item;
   width: number;
   focused: boolean;
   progress: number;
   watched?: boolean;
+  onMenu?: (anchor?: MenuAnchor) => void;
   tv: boolean;
   s: (n: number) => number;
   onPress: () => void;
@@ -295,6 +374,8 @@ const PosterCard = React.memo(function PosterCard({
     <Focusable
       focused={focused}
       onPress={onPress}
+      onLongPress={onMenu && (() => onMenu())}
+      onContextMenu={onMenu}
       accessibilityLabel={item.name}
       style={{ width, borderRadius: radius.md, padding: 0 }}
       hoverStyle={{ transform: [{ scale: 1.03 }] }}

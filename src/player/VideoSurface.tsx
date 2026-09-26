@@ -74,7 +74,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
   useEffect(() => {
     set({
       engine: 'native',
-      caps: { speed: true, mute: true, quality: false, pip: PIP, airplay: Platform.OS === 'ios', fullscreen: false },
+      caps: { speed: true, mute: true, volume: false, quality: false, pip: PIP, airplay: Platform.OS === 'ios', fullscreen: false },
       rate: 1,
       muted: false,
       qualities: [],
@@ -102,6 +102,10 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
         setMuted: (muted) => {
           player.muted = muted;
           set({ muted });
+        },
+        setVolume: (volume) => {
+          player.volume = volume;
+          set({ volume });
         },
         setQuality: () => {},
         togglePip: () => {

@@ -18,6 +18,10 @@ import { VodScreen } from './VodScreen';
 import { SearchScreen } from './SearchScreen';
 import { SettingsScreen } from './SettingsScreen';
 
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+/** Keyboard shortcuts shown in the rail's hover hints (web). */
+const SHORTCUTS: Partial<Record<Screen, string>> = { search: isMac ? '⌘K' : 'Ctrl K' };
+
 const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'home', label: 'Home', icon: 'home-outline' },
   { id: 'guide', label: 'Live TV', icon: 'television-classic' },
@@ -175,13 +179,14 @@ export function Shell() {
               }}
               focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.03 }] }}
             >
-              {({ focused }) => (
+              {({ focused, hovered }) => (
                 <>
                   {on && !focused ? <View style={{ position: 'absolute', left: -s(10), top: s(10), bottom: s(10), width: s(3), borderRadius: s(2), backgroundColor: colors.accent }} /> : null}
-                  <Icon name={n.icon} size={s(19)} color={focused ? colors.focusText : on ? colors.accent : colors.textDim} />
+                  <Icon name={n.icon} size={s(19)} color={focused ? colors.focusText : on || hovered ? colors.accent : colors.textDim} />
                   {menuFocused ? (
                     <Text style={[type('label'), { fontSize: s(13.5), marginLeft: s(12), color: focused ? colors.focusText : on ? colors.text : colors.textDim }]}>{n.label}</Text>
                   ) : null}
+                  {hovered && !menuFocused ? <RailHint label={n.label} shortcut={SHORTCUTS[n.id]} /> : null}
                 </>
               )}
             </Focusable>
@@ -191,6 +196,24 @@ export function Shell() {
           <Text style={[type('caption'), { position: 'absolute', left: s(16), right: s(12), bottom: s(14) + safe.y, color: colors.muted }]}>Back to exit · → to return</Text>
         ) : null}
       </View>
+    </View>
+  );
+}
+
+/** Hover hint next to a collapsed rail icon (mouse): the section's name and its shortcut. */
+function RailHint({ label, shortcut }: { label: string; shortcut?: string }) {
+  const { s, type } = useLayout();
+  return (
+    <View
+      pointerEvents="none"
+      style={{ position: 'absolute', left: '100%', marginLeft: s(14), flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface3, borderRadius: s(radius.sm), borderWidth: 1, borderColor: colors.borderStrong, paddingHorizontal: s(10), paddingVertical: s(5) }}
+    >
+      <Text style={[type('label'), { color: colors.text, whiteSpace: 'nowrap' } as object]}>{label}</Text>
+      {shortcut ? (
+        <View style={{ marginLeft: s(10), borderRadius: s(radius.xs), borderWidth: 1, borderColor: colors.borderStrong, paddingHorizontal: s(5), paddingVertical: s(1) }}>
+          <Text style={[type('caption'), { color: colors.textDim, fontWeight: '700' }]}>{shortcut}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }

@@ -6,7 +6,7 @@ import { Chip } from '../components/Chip';
 import { useLibrary, useAllGroups, ALL } from '../store/library';
 import { useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
-import { useUI } from '../store/ui';
+import { useUI, type MenuAnchor } from '../store/ui';
 import { Layer, useKeyMode, useKeys, type KeyEvt } from '../input/keys';
 import { cellAt, nextProgram, programAt, type Cell } from '../services/epg';
 import { canCatchup } from '../services/catchup';
@@ -42,6 +42,7 @@ export function GuideScreen() {
   const setLastGroup = useSettings((st) => st.setLastGroup);
   const toggleFavorite = useSettings((st) => st.toggleFavorite);
   const toggleHiddenGroup = useSettings((st) => st.toggleHiddenGroup);
+  const toggleFavCategory = useSettings((st) => st.toggleFavCategory);
   const menuFocused = useUI((st) => st.menuFocused);
   const openSheet = useUI((st) => st.openSheet);
   const showToast = useUI((st) => st.showToast);
@@ -142,6 +143,16 @@ export function GuideScreen() {
     [pid, setLastGroup]
   );
 
+  // Starring or hiding a category reorders the list: keep the cursor on the same category
+  const prevGroups = useRef(groups);
+  useEffect(() => {
+    if (prevGroups.current === groups) return;
+    const id = prevGroups.current[groupIndex]?.id;
+    prevGroups.current = groups;
+    const i = groups.findIndex((g) => g.id === id);
+    if (i >= 0 && i !== groupIndex) setGroupIndex(i);
+  }, [groups, groupIndex]);
+
   // Moving through categories switches the channel list right away; debounced so holding the key
   // doesn't rebuild the list for every group it passes.
   useEffect(() => {
@@ -163,9 +174,10 @@ export function GuideScreen() {
   const playCatchup = usePlayer((st) => st.playCatchup);
 
   const programSheet = useCallback(
-    (ch: Channel, p: Program) => {
+    (ch: Channel, p: Program, anchor?: MenuAnchor) => {
       const isFav = favSet.has(ch.id);
       openSheet({
+        anchor,
         title: p.title || 'Programme',
         subtitle: `${ch.name} · ${formatDay(p.start, Date.now())} ${formatRange(p.start, p.end, prefs.clock24)}${p.desc ? '\n\n' + p.desc : ''}`,
         options: [
@@ -185,11 +197,12 @@ export function GuideScreen() {
   );
 
   const channelSheet = useCallback(
-    (ch: Channel, focusedProgram?: Program) => {
+    (ch: Channel, focusedProgram?: Program, anchor?: MenuAnchor) => {
       const isFav = favSet.has(ch.id);
       const cur = programAt(epg[ch.id], Date.now());
       const p = focusedProgram ?? cur;
       openSheet({
+        anchor,
         title: `${ch.num}  ${ch.name}`,
         subtitle: ch.group,
         options: [
@@ -376,12 +389,18 @@ export function GuideScreen() {
     }
   };
 
-  const groupSheet = (g: (typeof groups)[number]) => {
+  const groupSheet = (g: (typeof groups)[number], anchor?: MenuAnchor) => {
     if (!g || g.virtual || !pid) return;
     openSheet({
+      anchor,
       title: g.name,
       subtitle: `${g.channelIds.length} channels`,
-      options: [{ label: 'Hide this group', icon: 'eye-off-outline', onSelect: () => toggleHiddenGroup(pid, g.id) }],
+      options: [
+        g.favorite
+          ? { label: 'Remove from favorite categories', icon: 'star-off-outline', onSelect: () => toggleFavCategory(pid, 'live', g.id) }
+          : { label: 'Add to favorite categories', icon: 'star-outline', onSelect: () => toggleFavCategory(pid, 'live', g.id) },
+        { label: 'Hide this category', icon: 'eye-off-outline', onSelect: () => toggleHiddenGroup(pid, g.id) },
+      ],
     });
   };
 
@@ -433,11 +452,20 @@ export function GuideScreen() {
     [activate]
   );
   const onLongPressChannel = useCallback(
-    (idx: number) => {
+    (idx: number, anchor?: MenuAnchor) => {
       const ch = channels[idx];
-      if (ch) channelSheet(ch);
+      if (ch) channelSheet(ch, undefined, anchor);
     },
     [channels, channelSheet]
+  );
+  const onContextMenuCell = useCallback(
+    (idx: number, cell: Cell, anchor: MenuAnchor) => {
+      const ch = channels[idx];
+      if (!ch) return;
+      if (cell.program && (cell.program.end <= Date.now() || cell.program.start > Date.now())) programSheet(ch, cell.program, anchor);
+      else channelSheet(ch, cell.program, anchor);
+    },
+    [channels, channelSheet, programSheet]
   );
   const focusRef = useRef({ row, focusTime, zone });
   focusRef.current = { row, focusTime, zone };
@@ -475,9 +503,10 @@ export function GuideScreen() {
         onPressChannel={onPressChannel}
         onLongPressChannel={onLongPressChannel}
         onPressCell={onPressCell}
+        onContextMenuCell={onContextMenuCell}
       />
     ),
-    [epg, windowStart, windowEnd, now, row, zone, focusTime, playingId, favSet, prefs.showChannelNumbers, prefs.clock24, m, onPressChannel, onLongPressChannel, onPressCell]
+    [epg, windowStart, windowEnd, now, row, zone, focusTime, playingId, favSet, prefs.showChannelNumbers, prefs.clock24, m, onPressChannel, onLongPressChannel, onPressCell, onContextMenuCell]
   );
 
   // ---- hero content ----
@@ -520,9 +549,10 @@ export function GuideScreen() {
               <Chip
                 key={g.id}
                 label={g.name}
-                icon={g.id === 'fav' ? 'star' : undefined}
+                icon={g.id === 'fav' ? 'star' : g.favorite ? 'folder-star' : undefined}
                 selected={g.id === group?.id}
                 onPress={() => chooseGroup(g.id)}
+                onLongPress={g.virtual ? undefined : () => groupSheet(g)}
               />
             ))}
           </ScrollView>
@@ -540,7 +570,7 @@ export function GuideScreen() {
           headerH={headerH}
           s={s}
           onPick={(id) => chooseGroup(id)}
-          onLongPick={(g) => groupSheet(g)}
+          onLongPick={(g, anchor) => groupSheet(g, anchor)}
           style={{ marginRight: catGap }}
         />
       ) : null}
@@ -663,7 +693,7 @@ function CategoryColumn({
   headerH: number;
   s: (n: number) => number;
   onPick: (id: string) => void;
-  onLongPick: (g: ReturnType<typeof useAllGroups>[number]) => void;
+  onLongPick: (g: ReturnType<typeof useAllGroups>[number], anchor?: MenuAnchor) => void;
   style?: object;
 }) {
   const ref = useRef<FlatList>(null);
@@ -695,6 +725,7 @@ function CategoryColumn({
                 focused={focused && i === index}
                 onPress={() => onPick(g.id)}
                 onLongPress={() => onLongPick(g)}
+                onContextMenu={(anchor) => onLongPick(g, anchor)}
                 style={{ height: itemH - s(2), marginHorizontal: s(4), marginVertical: s(1), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(9), backgroundColor: active ? colors.accentSoft : 'transparent' }}
                 focusStyle={{ backgroundColor: colors.focus }}
               >
@@ -702,9 +733,9 @@ function CategoryColumn({
                   <>
                     {active && !f ? <View style={{ position: 'absolute', left: 0, top: s(8), bottom: s(8), width: s(3), borderRadius: 2, backgroundColor: colors.accent }} /> : null}
                     <Icon
-                      name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : 'folder-outline'}
+                      name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : g.favorite ? 'folder-star' : 'folder-outline'}
                       size={s(13)}
-                      color={f ? colors.focusText : g.id === 'fav' ? colors.star : active ? colors.accent : colors.muted}
+                      color={f ? colors.focusText : g.id === 'fav' || g.favorite ? colors.star : active ? colors.accent : colors.muted}
                       style={{ marginRight: s(8) }}
                     />
                     <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : active ? colors.text : colors.textDim, fontSize: s(12.5), fontWeight: active || f ? '700' : '600', fontFamily: fonts.regular }}>

@@ -37,6 +37,9 @@ const MAP: Record<string, KeyName> = {
   BrowserSearch: 'search',
   i: 'info',
   g: 'guide',
+  '+': 'volup',
+  '=': 'volup',
+  '-': 'voldown',
 };
 
 function isTextField(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
@@ -47,6 +50,13 @@ export function startRemote(): () => void {
   if (typeof window === 'undefined') return () => {};
 
   const onKey = (ev: KeyboardEvent, action: 'down' | 'up') => {
+    // Ctrl+K / ⌘K: search from anywhere, even while typing
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && ev.key.toLowerCase() === 'k') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (action === 'down' && !ev.repeat) feedKey('search', 'down', 0);
+      return;
+    }
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const active = document.activeElement;
     if (isTextField(active)) {

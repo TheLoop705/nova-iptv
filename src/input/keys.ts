@@ -25,7 +25,9 @@ export type KeyName =
   | 'captions'
   | 'faster'
   | 'slower'
-  | 'pip';
+  | 'pip'
+  | 'volup'
+  | 'voldown';
 
 export interface KeyEvt {
   key: KeyName;

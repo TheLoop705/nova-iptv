@@ -6,6 +6,8 @@ import { Platform } from 'react-native';
 import { colors, fonts, radius } from '../../theme';
 import { formatRange } from '../../utils/format';
 import { Logo } from '../../components/Logo';
+import { contextMenuProps } from '../../utils/contextMenu';
+import type { MenuAnchor } from '../../store/ui';
 import { Icon } from '../../components/Icon';
 
 export interface RowMetrics {
@@ -32,8 +34,10 @@ interface Props {
   h24: boolean;
   m: RowMetrics;
   onPressChannel: (index: number) => void;
-  onLongPressChannel: (index: number) => void;
+  onLongPressChannel: (index: number, anchor?: MenuAnchor) => void;
   onPressCell: (index: number, cell: Cell) => void;
+  /** web right-click on a programme */
+  onContextMenuCell?: (index: number, cell: Cell, anchor: MenuAnchor) => void;
 }
 
 export const GuideRow = memo(function GuideRow(p: Props) {
@@ -54,6 +58,7 @@ export const GuideRow = memo(function GuideRow(p: Props) {
         focusable={false}
         onPress={() => p.onPressChannel(p.index)}
         onLongPress={() => p.onLongPressChannel(p.index)}
+        {...contextMenuProps((anchor) => p.onLongPressChannel(p.index, anchor))}
         style={{
           width: chanW,
           height: rowH - s(3),
@@ -119,6 +124,7 @@ export const GuideRow = memo(function GuideRow(p: Props) {
               key={c.start}
               focusable={false}
               onPress={() => p.onPressCell(p.index, c)}
+              {...contextMenuProps(p.onContextMenuCell && ((anchor) => p.onContextMenuCell!(p.index, c, anchor)))}
               style={(state) => ({
                 position: 'absolute',
                 left,
