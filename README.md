@@ -103,6 +103,12 @@ Install on a Fire TV:
 
 The release build is signed with the debug keystore, which is fine for sideloading. To publish to a store, create a keystore and add a release `signingConfig`.
 
+### Automated GitHub releases
+
+Every push to `master` runs `.github/workflows/android-release.yml`. It typechecks the app, builds the 32-bit Fire TV and universal APKs, verifies their signing certificate, writes SHA-256 checksums, and publishes a new latest GitHub release. CI versions append the workflow run number to `app.json`'s version (for example `1.6.0.4`) so in-app updates remain ordered without modifying source files.
+
+The workflow restores the update-compatible keystore from the `NOVA_ANDROID_KEYSTORE_BASE64` repository secret. Never commit that keystore or its encoded contents.
+
 ## iOS
 
 ```bash
