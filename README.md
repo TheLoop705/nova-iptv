@@ -144,7 +144,7 @@ Electron dependencies live in `desktop/package-lock.json` so Android builds do n
 
 ### WinGet distribution
 
-The proposed package identifier is **TheLoop705.NovaIPTV**. The first submission must be approved and indexed by the [WinGet community repository](https://github.com/microsoft/winget-pkgs) before these commands work:
+The package identifier is **TheLoop705.NovaIPTV**. The [first submission (1.7.0.5)](https://github.com/microsoft/winget-pkgs/pull/441917) is pending review. It must be approved and indexed by the WinGet community repository before these commands work:
 
 ```powershell
 winget install --id TheLoop705.NovaIPTV --exact --source winget

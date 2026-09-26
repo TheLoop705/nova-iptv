@@ -18,9 +18,10 @@ const directory = join(root, '.desktop/winget/manifests/t/TheLoop705/NovaIPTV', 
 mkdirSync(directory, { recursive: true });
 
 function write(suffix, type, body) {
-  writeFileSync(join(directory, `${id}${suffix}.yaml`),
+  const content =
     `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.${schema}.schema.json\n\n` +
-    `PackageIdentifier: ${id}\nPackageVersion: ${version}\n${body}\nManifestType: ${type}\nManifestVersion: ${schema}\n`);
+    `PackageIdentifier: ${id}\nPackageVersion: ${version}\n${body}\nManifestType: ${type}\nManifestVersion: ${schema}\n`;
+  writeFileSync(join(directory, `${id}${suffix}.yaml`), content.replace(/\r?\n/g, '\r\n'));
 }
 
 write('', 'version', 'DefaultLocale: en-US');
