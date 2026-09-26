@@ -192,17 +192,16 @@ jobs:
         run: npm run test:windows
 
       - name: Package Windows installer
-        working-directory: desktop
-        run: npx electron-builder --config electron-builder.yml --win nsis --x64 --publish never
+        run: npm --prefix desktop run package
 
       - name: Check packaged desktop app
         run: npm --prefix desktop run smoke -- --packaged
 
-      - name: Write Windows checksum
+      - name: Prepare WinGet manifests and Windows checksum
         run: |
-          $hash = (Get-FileHash release/windows/Nova-windows-x64-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          $file = Join-Path $PWD 'release/windows/SHA256SUMS-windows.txt'
-          [System.IO.File]::WriteAllText($file, "$hash  Nova-windows-x64-Setup.exe`n", [System.Text.UTF8Encoding]::new($false))
+          node scripts/prepare-winget.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path .desktop/winget/manifests -DestinationPath release/windows/Nova-winget-manifests.zip -Force
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v7
@@ -211,6 +210,7 @@ jobs:
           path: |
             release/windows/Nova-windows-x64-Setup.exe
             release/windows/SHA256SUMS-windows.txt
+            release/windows/Nova-winget-manifests.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
@@ -279,4 +279,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: v${{ needs.release.outputs.version }}
-        run: gh release upload "$TAG" artifacts/Nova-windows-x64-Setup.exe artifacts/SHA256SUMS-windows.txt --clobber
+        run: |
+          # WinGet records the installer hash. Re-running a release must never
+          # replace those bytes, even if a rebuild has different timestamps.
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'Nova-windows-x64-Setup.exe'; then
+            mkdir -p published
+            gh release download "$TAG" --dir published \
+              --pattern Nova-windows-x64-Setup.exe \
+              --pattern SHA256SUMS-windows.txt \
+              --pattern Nova-winget-manifests.zip
+            (cd published && sha256sum --check SHA256SUMS-windows.txt)
+            echo "Keeping the existing Windows installer and WinGet manifests for $TAG."
+          else
+            gh release upload "$TAG" \
+              artifacts/Nova-windows-x64-Setup.exe \
+              artifacts/SHA256SUMS-windows.txt \
+              artifacts/Nova-winget-manifests.zip
+          fi

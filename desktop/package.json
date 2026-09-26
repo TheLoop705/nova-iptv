@@ -6,7 +6,8 @@
   "scripts": {
     "prepare:app": "node ../scripts/build-windows.mjs",
     "start": "npm run prepare:app && electron .",
-    "dist": "npm run prepare:app && electron-builder --config electron-builder.yml --win nsis --x64 --publish never",
+    "dist": "npm run prepare:app && npm run package",
+    "package": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never",
     "smoke": "node test.mjs"
   },
   "devDependencies": {

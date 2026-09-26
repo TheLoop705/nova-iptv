@@ -118,7 +118,9 @@ The APK build targets `:app:assembleRelease`, enables Gradle's build cache and p
 
 The workflow restores the update-compatible keystore from the `NOVA_ANDROID_KEYSTORE_BASE64` repository secret. Never commit that keystore or its encoded contents.
 
-The Windows installer builds and runs its desktop checks in parallel. After the Fire TV release is published, a separate job attaches `Nova-windows-x64-Setup.exe` and `SHA256SUMS-windows.txt` to the same release. Windows never blocks publication of the APK.
+The Windows installer builds and runs its desktop checks in parallel. After the Fire TV release is published, a separate job attaches `Nova-windows-x64-Setup.exe`, `SHA256SUMS-windows.txt` and `Nova-winget-manifests.zip` to the same release. Windows never blocks publication of the APK. Windows file versions and the installed version use the same four-component release number as the tag. Electron's internal package metadata retains the three-component source version. Local builds use a final component of `0`.
+
+Windows release assets are preserved on workflow reruns: replacing a published installer would invalidate WinGet's recorded hash. Publish a new numbered release for any changed installer.
 
 ## Windows
 
@@ -139,6 +141,19 @@ npm run test:windows    # after export: startup, restart persistence, proxy and 
 ```
 
 Electron dependencies live in `desktop/package-lock.json` so Android builds do not install the desktop toolchain. The generated desktop app is staged in `.desktop/`; source changes belong in `desktop/`, `server/` or the shared app under `src/`.
+
+### WinGet distribution
+
+The proposed package identifier is **TheLoop705.NovaIPTV**. The first submission must be approved and indexed by the [WinGet community repository](https://github.com/microsoft/winget-pkgs) before these commands work:
+
+```powershell
+winget install --id TheLoop705.NovaIPTV --exact --source winget
+winget upgrade --id TheLoop705.NovaIPTV --exact --source winget
+```
+
+Each numbered CI release generates a `Nova-winget-manifests.zip` containing the three YAML manifests under `manifests/t/TheLoop705/NovaIPTV/<version>/`. These use a versioned GitHub installer URL, the exact installer's SHA-256, its installed product ID, and silent installation switches. The archive is ready to submit as a new version PR to `microsoft/winget-pkgs`; publishing a GitHub release alone does not update the WinGet catalog. This does not require a Microsoft Store listing.
+
+For a submission, download the archive from the published release, extract it, validate with `winget validate --manifest <version-directory>`, and check installation and uninstallation before submitting. Do not regenerate a manifest from a different local rebuild or change an existing release's installer. [Windows privacy information](desktop/PRIVACY.md).
 
 ## iOS
 
