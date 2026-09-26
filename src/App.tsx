@@ -18,6 +18,8 @@ import { DetailHost } from './screens/DetailHost';
 import { VideoLayer } from './player/VideoLayer';
 import { PlayerOverlay } from './player/PlayerOverlay';
 import { SheetHost, Toast } from './components/SheetHost';
+import { UpdateProgress } from './components/UpdateProgress';
+import { useAutoUpdateCheck } from './services/updates';
 import { usePlayback } from './player/playback';
 
 if (__DEV__ && Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -40,6 +42,9 @@ function Root() {
   const active = useActivePlaylist();
   const editor = useUI((s) => !!s.editor);
   const fullscreen = usePlayer((s) => s.fullscreen && !!s.item);
+
+  // Android builds: offer new releases from GitHub, installed from inside the app
+  useAutoUpdateCheck();
 
   useEffect(() => {
     void useSettings.getState().hydrate();
@@ -108,6 +113,7 @@ function Root() {
       {fullscreen ? <PlayerOverlay /> : null}
       <SheetHost />
       <Toast />
+      <UpdateProgress />
       {Platform.OS === 'web' ? <WebStyles /> : null}
     </View>
   );

@@ -11,6 +11,8 @@ import { Icon } from '../components/Icon';
 import type { Playlist } from '../types';
 import { formatDay, formatClock } from '../utils/format';
 import { DEFAULT_UA } from '../services/http';
+import { installedVersion, openUpdateSheet, updatesSupported, useUpdater } from '../services/updates';
+import appJson from '../../app.json';
 
 /** Distinct titles across categories (the same item can be listed in several). */
 function countUnique(byCategory: Record<string, { id: string }[]>): number {
@@ -40,6 +42,9 @@ export function SettingsScreen() {
   const epgFetchedAt = useLibrary((st) => st.epgFetchedAt);
   const epgStatus = useLibrary((st) => st.epgStatus);
   const channelsCount = useLibrary((st) => st.channels.length);
+  const updateStatus = useUpdater((st) => st.status);
+  const update = useUpdater((st) => st.update);
+  const updateProgress = useUpdater((st) => st.progress);
   const groupsCount = useLibrary((st) => st.groups.length);
   const guideCount = useLibrary((st) => Object.keys(st.epg).length);
   const movies = useLibrary((st) => st.movies);
@@ -237,10 +242,40 @@ export function SettingsScreen() {
     }
 
     r.push({ kind: 'header', label: 'About' });
+    if (updatesSupported) {
+      const available = update && (updateStatus === 'available' || updateStatus === 'error');
+      r.push({
+        kind: 'item',
+        id: 'update',
+        label: available ? `Update to ${update.version}` : 'Check for updates',
+        icon: 'download-circle-outline',
+        value:
+          updateStatus === 'checking'
+            ? 'Checking…'
+            : updateStatus === 'downloading'
+              ? `Downloading ${Math.round(updateProgress * 100)}%`
+              : updateStatus === 'installing'
+                ? 'Installing…'
+                : available
+                  ? 'Available'
+                  : updateStatus === 'current'
+                    ? 'Up to date'
+                    : undefined,
+        detail: `Installed: ${installedVersion()} · updates come from the GitHub releases`,
+        run: async () => {
+          const st = useUpdater.getState();
+          if (st.status === 'downloading' || st.status === 'installing') return;
+          const u = st.update && st.status !== 'current' ? st.update : await st.check();
+          if (u) openUpdateSheet(u);
+          else if (useUpdater.getState().status === 'error') showToast(`Couldn't check: ${useUpdater.getState().error}`);
+          else showToast(`Nova ${installedVersion()} is the latest version`);
+        },
+      });
+    }
     r.push({
       kind: 'item',
       id: 'about',
-      label: 'Nova IPTV 1.5',
+      label: `Nova IPTV ${appJson.expo.version}`,
       icon: 'information-outline',
       value: Platform.OS === 'web' ? 'Web' : Platform.isTV ? 'Android TV' : Platform.OS === 'ios' ? 'iOS' : 'Android',
       detail: `${channelsCount} channels loaded`,
@@ -248,7 +283,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting]);
+  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;
