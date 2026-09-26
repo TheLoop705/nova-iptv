@@ -122,7 +122,7 @@ export function PlayerOverlay() {
 
   // Once the controls hide, the remote is back on the timeline: left/right skip again
   useEffect(() => {
-    if (!visible && !live) setRow('seek');
+    if (!visible && !live) setRow((r) => (r === 'next' ? r : 'seek'));
   }, [visible, live]);
 
   // Remote/keyboard skipping (left/right, ⏪/⏩, J/L): 10 s a press, 30 s then 60 s while held, with a
@@ -147,6 +147,11 @@ export function PlayerOverlay() {
     setUpNext(null);
     playNextItem(item.next);
   };
+  // The button takes the remote's focus as soon as it appears (left/right still skip, Down goes back
+  // to the timeline), and gives it back when it goes away
+  useEffect(() => {
+    if (nearEnd) setRow((r) => (r === 'controls' ? r : 'next'));
+  }, [nearEnd]);
   useEffect(() => {
     if (!nearEnd && row === 'next') setRow('seek');
   }, [nearEnd, row]);
