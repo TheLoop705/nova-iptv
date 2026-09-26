@@ -14,7 +14,7 @@ https://github.com/TheLoop705/nova-iptv/releases/latest/download/Nova-firetv.apk
 
 All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/releases) page.
 
-**Updates install from inside the app** (1.6.0 and later). Nova checks the latest GitHub release shortly after it starts. When there's a newer version it offers *Update now*, downloads the right APK (the Fire TV build on Amazon devices, the universal build elsewhere) and opens Android's installer. *Settings → Check for updates* does the same on demand. The first time, Fire TV asks you to allow Nova to install apps; after that it's a single confirmation.
+**Updates install from inside the app** (1.6.0 and later). Nova checks the latest GitHub release shortly after it starts. On Fire TV, when there's a newer version it offers *Update now*, downloads the Fire TV APK and opens Android's installer. *Settings → Check for updates* does the same on demand. The first time, Fire TV asks you to allow Nova to install apps; after that it's a single confirmation. Automated releases currently provide only the 32-bit Fire TV APK. In-app updates on other Android devices require a universal APK, whose automated build is paused.
 
 **Web updates** (1.7.0 and later): the page checks its Nova server at startup, every five minutes while visible, and when returning to the tab. *Settings → Check for updates* checks immediately. When a new web build is deployed, *Reload and update* saves pending settings and reloads it. Deploy `dist/version.json` together with the exported site. Web updates load a version already deployed by the server owner; Android updates download the APK from GitHub. iPhone builds still require a signed installation through Xcode or the connected Mac.
 
@@ -97,7 +97,7 @@ Requirements: JDK 17+ and the Android SDK (platform 36, build-tools 36, NDK 27.1
 ```bash
 npx expo prebuild --platform android
 cd android
-./gradlew assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+./gradlew --parallel --build-cache :app:assembleRelease -PreactNativeArchitectures=armeabi-v7a
 # → android/app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -111,7 +111,9 @@ The release build is signed with the debug keystore, which is fine for sideloadi
 
 ### Automated GitHub releases
 
-Every push to `master` runs `.github/workflows/android-release.yml`. It typechecks the app, builds the 32-bit Fire TV and universal APKs, verifies their signing certificate, writes SHA-256 checksums, and publishes a new latest GitHub release. CI versions append the workflow run number to `app.json`'s version (for example `1.6.0.4`) so in-app updates remain ordered without modifying source files.
+Every push to `master` runs `.github/workflows/android-release.yml`. Typechecking, update tests and native pairing tests run in a separate job alongside the 32-bit Fire TV APK build. Publication waits for both jobs to succeed, verifies the transferred APK's SHA-256 checksum, and publishes a new latest GitHub release with `Nova-firetv.apk` and `SHA256SUMS.txt`. Universal APK builds are paused. CI versions append the workflow run number to `app.json`'s version (for example `1.6.0.4`) so in-app updates remain ordered without modifying source files.
+
+The APK build targets `:app:assembleRelease`, enables Gradle's build cache and parallel execution, and restores cached Gradle state between runs. It avoids a redundant Gradle `clean` on the fresh runner. Each build also uploads a `firetv-build-profile` artifact containing Gradle task timings for diagnosing remaining bottlenecks. The first build after dependency changes can still take longer while caches warm up.
 
 The workflow restores the update-compatible keystore from the `NOVA_ANDROID_KEYSTORE_BASE64` repository secret. Never commit that keystore or its encoded contents.
 

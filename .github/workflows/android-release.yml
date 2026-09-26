@@ -6,18 +6,74 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: android-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  release:
-    name: Build and publish APKs
+  checks:
+    name: Typecheck and tests
     if: github.repository == 'TheLoop705/nova-iptv'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test update selection and editor scrolling
+        run: npm run test:updates
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android build packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006'
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Test playlist pairing
+        working-directory: android
+        env:
+          NODE_ENV: production
+        run: >-
+          ./gradlew --no-daemon --parallel --build-cache
+          :playlist-pairing:testDebugUnitTest
+          -PreactNativeArchitectures=armeabi-v7a
+
+  release:
+    name: Build Fire TV APK
+    if: github.repository == 'TheLoop705/nova-iptv'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Check out source
@@ -43,12 +99,6 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test update selection and editor scrolling
-        run: npm run test:updates
 
       - name: Assign release version
         id: version
@@ -77,41 +127,71 @@ jobs:
         env:
           NODE_ENV: production
         run: |
-          ./gradlew --no-daemon clean :playlist-pairing:testDebugUnitTest assembleRelease -PreactNativeArchitectures=armeabi-v7a
+          # Reuse cached task outputs; assemble only the app and its dependencies.
+          ./gradlew --no-daemon --parallel --build-cache --profile \
+            '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8' \
+            :app:assembleRelease -PreactNativeArchitectures=armeabi-v7a
           mkdir -p ../artifacts
           cp app/build/outputs/apk/release/app-release.apk ../artifacts/Nova-firetv.apk
 
-      - name: Build universal APK
-        working-directory: android
-        env:
-          NODE_ENV: production
-        run: |
-          ./gradlew --no-daemon clean assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
-          cp app/build/outputs/apk/release/app-release.apk ../artifacts/Nova-universal.apk
-
-      - name: Verify APKs and write checksums
+      - name: Verify APK and write checksum
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           EXPECTED='fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c'
-          for apk in artifacts/Nova-firetv.apk artifacts/Nova-universal.apk; do
-            "$APKSIGNER" verify "$apk"
-            "$APKSIGNER" verify --print-certs "$apk" | grep -qi "$EXPECTED"
-          done
+          "$APKSIGNER" verify --print-certs artifacts/Nova-firetv.apk | grep -qi "$EXPECTED"
           cd artifacts
-          sha256sum Nova-firetv.apk Nova-universal.apk > SHA256SUMS.txt
+          sha256sum Nova-firetv.apk > SHA256SUMS.txt
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: firetv-apk
+          path: artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+      - name: Save Gradle timing report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: firetv-build-profile
+          path: android/build/reports/profile/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    name: Publish Fire TV release
+    # Compilation and checks run independently; both must succeed before publishing.
+    needs: [checks, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified APK
+        uses: actions/download-artifact@v8
+        with:
+          name: firetv-apk
+          path: artifacts
+
+      - name: Verify downloaded checksum
+        working-directory: artifacts
+        run: sha256sum --check SHA256SUMS.txt
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.version.outputs.version }}
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" artifacts/Nova-firetv.apk artifacts/Nova-universal.apk artifacts/SHA256SUMS.txt --clobber
+            gh release upload "$TAG" artifacts/Nova-firetv.apk artifacts/SHA256SUMS.txt --clobber
           else
             gh release create "$TAG" \
               artifacts/Nova-firetv.apk \
-              artifacts/Nova-universal.apk \
               artifacts/SHA256SUMS.txt \
               --target "$GITHUB_SHA" \
               --title "Nova $VERSION" \
