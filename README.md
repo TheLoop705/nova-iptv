@@ -14,6 +14,8 @@ https://github.com/TheLoop705/nova-iptv/releases/latest/download/Nova-firetv.apk
 
 All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/releases) page.
 
+**Updates install from inside the app** (1.6.0 and later). Nova checks the latest GitHub release shortly after it starts. When there's a newer version it offers *Update now*, downloads the right APK (the Fire TV build on Amazon devices, the universal build elsewhere) and opens Android's installer. *Settings → Check for updates* does the same on demand. The first time, Fire TV asks you to allow Nova to install apps; after that it's a single confirmation.
+
 ## Screenshots
 
 | Home | Live TV |
