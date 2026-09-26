@@ -15,6 +15,7 @@ import { setItem } from '../services/storage';
 import { normalizeServer } from '../services/xtream';
 import { pickTextFile } from '../services/filepick';
 import { uid } from '../utils/format';
+import { focusScrollOffset } from '../utils/focusScroll';
 import { PlaylistPairing, type PairedPlaylist } from '../../modules/playlist-pairing';
 
 type Kind = 'm3u' | 'xtream' | 'file';
@@ -68,6 +69,8 @@ export function PlaylistEditor() {
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState(0);
+  const currentFocus = useRef(focus);
+  currentFocus.current = focus;
   const inputs = useRef<Record<string, TextInput | null>>({});
   const viewportRef = useRef<View>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -155,13 +158,9 @@ export function PlaylistEditor() {
       if (!target || !scroll || !viewport) return;
       target.measureInWindow((_x, y, _width, height) => {
         viewport.measureInWindow((_sx, scrollTop, _scrollWidth, scrollHeight) => {
-          const inset = tv ? s(12) : 12;
-          const visibleTop = scrollTop + inset;
-          const visibleBottom = scrollTop + scrollHeight - inset;
-          let delta = 0;
-          if (y < visibleTop) delta = y - visibleTop;
-          else if (y + height > visibleBottom) delta = y + height - visibleBottom;
-          if (Math.abs(delta) > 1) scroll.scrollTo({ y: Math.max(0, scrollY.current + delta), animated: true });
+          if (currentFocus.current !== index) return;
+          const yOffset = focusScrollOffset(scrollY.current, y, height, scrollTop, scrollHeight, tv ? s(12) : 12);
+          if (Math.abs(yOffset - scrollY.current) > 1) scroll.scrollTo({ y: yOffset, animated: false });
         });
       });
     },
@@ -265,10 +264,12 @@ export function PlaylistEditor() {
   const saveIdx = items.findIndex((i) => i.kind === 'save');
 
   return (
-    <View ref={viewportRef} collapsable={false} style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]}>
+    <View ref={viewportRef} onLayout={() => revealFocus(focus)} collapsable={false} style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]}>
       <ScrollView
         ref={scrollRef}
         keyboardShouldPersistTaps="handled"
+        focusable={false}
+        onContentSizeChange={() => revealFocus(focus)}
         onScroll={(e) => {
           scrollY.current = e.nativeEvent.contentOffset.y;
         }}

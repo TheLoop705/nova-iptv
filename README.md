@@ -16,6 +16,10 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 
 **Updates install from inside the app** (1.6.0 and later). Nova checks the latest GitHub release shortly after it starts. When there's a newer version it offers *Update now*, downloads the right APK (the Fire TV build on Amazon devices, the universal build elsewhere) and opens Android's installer. *Settings → Check for updates* does the same on demand. The first time, Fire TV asks you to allow Nova to install apps; after that it's a single confirmation.
 
+**Web updates** (1.7.0 and later): the page checks its Nova server at startup, every five minutes while visible, and when returning to the tab. *Settings → Check for updates* checks immediately. When a new web build is deployed, *Reload and update* saves pending settings and reloads it. Deploy `dist/version.json` together with the exported site. Web updates load a version already deployed by the server owner; Android updates download the APK from GitHub. iPhone builds still require a signed installation through Xcode or the connected Mac.
+
+**Phone setup** (1.7.0): on Fire TV / Android TV, open *Add playlist* and scan the QR code with a phone on the same trusted Wi-Fi. Submit an M3U URL or Xtream Codes details, then review and save on the TV. Each code is single-use and expires after ten minutes or when the editor closes. The editor scrolls its focused control into view, including Add playlist and Cancel.
+
 ## Screenshots
 
 | Home | Live TV |
@@ -81,6 +85,8 @@ npm run proxy          # terminal 1: CORS/stream proxy on :8787
 npm run web            # terminal 2: Expo web on :8081 (uses the proxy)
 npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
+
+Checks: `npx tsc --noEmit`, `npm run test:updates` (Node 22.18+), and, after Android prebuild, `cd android && ./gradlew :playlist-pairing:testDebugUnitTest`. The pairing tests exercise real HTTP requests for M3U/Xtream submission, validation, single-use codes, expiration, and editor-close cancellation.
 
 Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` or Ctrl+K / ⌘K = search, right-click = context menu, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture, `+`/`-` volume.
 

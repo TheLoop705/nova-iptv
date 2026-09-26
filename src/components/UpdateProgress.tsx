@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, useLayout } from '../theme';
 import { useUpdater } from '../services/updates';
@@ -19,7 +19,7 @@ export function UpdateProgress() {
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <ActivityIndicator size="small" color={colors.accent} />
           <Text style={[type('label'), { color: colors.text, marginLeft: k(10), flex: 1 }]}>
-            {status === 'installing' ? `Opening the installer for Nova ${version}…` : `Downloading Nova ${version}…`}
+            {status === 'installing' ? (Platform.OS === 'web' ? `Reloading Nova ${version}…` : `Opening the installer for Nova ${version}…`) : `Downloading Nova ${version}…`}
           </Text>
           {status === 'downloading' ? <Text style={[type('label'), { color: colors.textDim, marginLeft: k(10), fontVariant: ['tabular-nums'] }]}>{Math.round(progress * 100)}%</Text> : null}
         </View>

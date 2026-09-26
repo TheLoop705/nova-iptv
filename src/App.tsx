@@ -43,7 +43,7 @@ function Root() {
   const editor = useUI((s) => !!s.editor);
   const fullscreen = usePlayer((s) => s.fullscreen && !!s.item);
 
-  // Android builds: offer new releases from GitHub, installed from inside the app
+  // Offer Android releases from GitHub and web versions deployed to this server
   useAutoUpdateCheck();
 
   useEffect(() => {

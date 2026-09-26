@@ -11,50 +11,15 @@ import { getItem, setItem } from './storage';
 // GitHub releases, downloads the matching APK and hands it to Android's installer — no Downloader
 // app needed. Android only installs it over the current app if it carries the same signature.
 
-const REPO = 'TheLoop705/nova-iptv';
+import { apkUpdate, REPO, type Update, type UpdaterState } from './updateCore';
+export { isNewer, type Update } from './updateCore';
+
 const LATEST = `https://api.github.com/repos/${REPO}/releases/latest`;
-/** release assets must come from this repo's releases */
-const DOWNLOADS = `https://github.com/${REPO}/releases/download/`;
 const RECHECK_MS = 12 * 3600 * 1000;
-
-export interface Update {
-  version: string;
-  notes: string;
-  url: string;
-  size: number;
-}
-
-type Status = 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'installing' | 'error';
-
-interface UpdaterState {
-  status: Status;
-  update?: Update;
-  /** download progress 0–1 */
-  progress: number;
-  error?: string;
-  checkedAt?: number;
-  check: () => Promise<Update | null>;
-  install: () => Promise<void>;
-}
-
 export const updatesSupported = Platform.OS === 'android' && !!AppUpdater;
 export const installedVersion = () => AppUpdater?.version() ?? '';
-
-/** "1.10.0" > "1.9.2" */
-export function isNewer(candidate: string, current: string): boolean {
-  const a = candidate.split('.').map((n) => parseInt(n, 10) || 0);
-  const b = current.split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
-  }
-  return false;
-}
-
-/** The 32-bit Fire TV build on Amazon devices, the universal (arm64 + armv7) build everywhere else. */
-function assetName(): string {
-  const maker = (Platform.constants as { Manufacturer?: string }).Manufacturer ?? '';
-  return /amazon/i.test(maker) ? 'Nova-firetv.apk' : 'Nova-universal.apk';
-}
+export const updateSource = 'Updates come from the GitHub releases';
+let pending: Promise<Update | null> | undefined;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -62,33 +27,34 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
   status: 'idle',
   progress: 0,
 
-  check: async () => {
-    if (!updatesSupported || get().status === 'downloading' || get().status === 'installing') return get().update ?? null;
+  check: () => {
+    if (pending) return pending;
+    if (!updatesSupported || get().status === 'downloading' || get().status === 'installing') return Promise.resolve(get().update ?? null);
     set({ status: 'checking', error: undefined });
-    try {
-      const res = await fetch(LATEST, { headers: { Accept: 'application/vnd.github+json' } });
-      if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status}`);
-      const rel = (await res.json()) as { tag_name?: string; body?: string; assets?: { name: string; browser_download_url: string; size: number }[] };
-      const version = String(rel.tag_name ?? '').replace(/^v/i, '');
-      const assets = Array.isArray(rel.assets) ? rel.assets : [];
-      const asset = assets.find((a) => a.name === assetName()) ?? assets.find((a) => a.name === 'Nova-universal.apk');
-      const url = String(asset?.browser_download_url ?? '');
-      if (!version || !asset || !url.startsWith(DOWNLOADS) || !isNewer(version, installedVersion())) {
-        set({ status: 'current', update: undefined, checkedAt: Date.now() });
+    pending = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch(LATEST, { headers: { Accept: 'application/vnd.github+json' }, signal: controller.signal });
+        if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status}`);
+        const manufacturer = (Platform.constants as { Manufacturer?: string }).Manufacturer ?? '';
+        const update = apkUpdate(await res.json(), installedVersion(), manufacturer);
+        set({ status: update ? 'available' : 'current', update: update ?? undefined, checkedAt: Date.now() });
+        return update;
+      } catch (e) {
+        set({ status: 'error', error: message(e), checkedAt: Date.now() });
         return null;
+      } finally {
+        clearTimeout(timeout);
+        pending = undefined;
       }
-      const update: Update = { version, notes: String(rel.body ?? ''), url, size: Number(asset.size) || 0 };
-      set({ status: 'available', update, checkedAt: Date.now() });
-      return update;
-    } catch (e) {
-      set({ status: 'error', error: message(e), checkedAt: Date.now() });
-      return null;
-    }
+    })();
+    return pending;
   },
 
   install: async () => {
     const u = get().update;
-    if (!u || !AppUpdater || get().status === 'downloading') return;
+    if (!u || !AppUpdater || (get().status === 'downloading' || get().status === 'installing')) return;
     set({ status: 'downloading', progress: 0, error: undefined });
     try {
       const dir = `${FileSystem.cacheDirectory}updates/`;
@@ -149,7 +115,7 @@ export function useAutoUpdateCheck() {
       const seen = await getItem<{ version: string }>('update-offered');
       if (seen?.version === u.version) return;
       await setItem('update-offered', { version: u.version });
-      if (usePlayer.getState().fullscreen || useUI.getState().sheet) useUI.getState().showToast(`Nova ${u.version} is available — Settings → Update`);
+      if (usePlayer.getState().fullscreen || (useUI.getState().sheet || useUI.getState().editor)) useUI.getState().showToast(`Nova ${u.version} is available — Settings → Update`);
       else openUpdateSheet(u);
     };
     const t = setTimeout(offer, 6000);

@@ -218,9 +218,12 @@ function sharedDoc(s: Persisted): Doc {
 
 // Persist (debounced) whenever persisted fields change
 let timer: ReturnType<typeof setTimeout> | null = null;
+let pendingSave: Promise<void> = Promise.resolve();
 const save = () => {
   timer = null;
-  setItem('settings', sharedDoc(useSettings.getState())).catch((e) => console.warn('Failed to save settings', e));
+  pendingSave = setItem('settings', sharedDoc(useSettings.getState()));
+  void pendingSave.catch((e) => console.warn('Failed to save settings', e));
+  return pendingSave;
 };
 useSettings.subscribe((s, prev) => {
   if (!s.hydrated || !prev.hydrated) return;
@@ -231,13 +234,13 @@ useSettings.subscribe((s, prev) => {
 
 /** Saves pending changes now instead of after the debounce (page about to unload). */
 export function flushSettings() {
-  if (!timer) return;
+  if (!timer) return pendingSave.catch(() => save());
   clearTimeout(timer);
-  save();
+  return save();
 }
 
 // Web: a refresh or closed tab must not drop the last changes (watch progress, history)
-if (Platform.OS === 'web' && typeof window !== 'undefined') window.addEventListener('pagehide', flushSettings);
+if (Platform.OS === 'web' && typeof window !== 'undefined') window.addEventListener('pagehide', () => { void flushSettings().catch(() => {}); });
 
 // Changes made in another tab or on another device
 onRemoteChange('settings', (ops) => {

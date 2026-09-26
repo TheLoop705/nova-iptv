@@ -4,6 +4,9 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.net.InetAddress
+import java.net.URI
+import java.util.concurrent.Semaphore
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -31,19 +34,25 @@ class PlaylistPairingModule : Module() {
     Name("PlaylistPairing")
     Events("onPlaylist")
 
-    AsyncFunction("start") {
-      stopServer()
-      val server = PairingServer(::onPlaylist)
-      session = server
-      server.start()
-      mapOf("url" to server.url, "expiresAt" to server.expiresAt.toDouble())
-    }
+    AsyncFunction("start") { startServer() }
 
     Function("stop") { stopServer() }
     OnDestroy { stopServer() }
   }
 
-  private fun onPlaylist(fields: Map<String, String>) {
+  @Synchronized
+  private fun startServer(): Map<String, Any> {
+    stopServer()
+    lateinit var server: PairingServer
+    server = PairingServer(submit = { fields -> onPlaylist(server, fields) })
+    session = server
+    server.start()
+    return mapOf("url" to server.url, "expiresAt" to server.expiresAt.toDouble())
+  }
+
+  @Synchronized
+  private fun onPlaylist(server: PairingServer, fields: Map<String, String>) {
+    if (session !== server) return // A closed or replaced editor must never receive stale details.
     sendEvent("onPlaylist", fields)
     stopServer()
   }
@@ -55,13 +64,18 @@ class PlaylistPairingModule : Module() {
   }
 }
 
-private class PairingServer(private val submit: (Map<String, String>) -> Unit) {
+internal class PairingServer(
+  private val submit: (Map<String, String>) -> Unit,
+  addressOverride: String? = null,
+  lifetimeMs: Long = SESSION_MS
+) {
   private val running = AtomicBoolean(true)
   private val submitted = AtomicBoolean(false)
   private val token = ByteArray(18).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-  private val address = localAddress()
-  private val socket = ServerSocket(0).apply { soTimeout = 1_000 }
-  val expiresAt = System.currentTimeMillis() + SESSION_MS
+  private val address = addressOverride ?: localAddress()
+  private val clients = Semaphore(4)
+  private val socket = ServerSocket(0, 8, InetAddress.getByName(address)).apply { soTimeout = 1_000 }
+  val expiresAt = System.currentTimeMillis() + lifetimeMs
   val url = "http://$address:${socket.localPort}/pair/$token"
 
   fun start() {
@@ -82,7 +96,8 @@ private class PairingServer(private val submit: (Map<String, String>) -> Unit) {
       } catch (_: Exception) {
         break
       }
-      Thread({ handle(client) }, "nova-playlist-pairing-client").apply { isDaemon = true }.start()
+      if (!clients.tryAcquire()) { client.close(); continue }
+      Thread({ try { handle(client) } finally { clients.release() } }, "nova-playlist-pairing-client").apply { isDaemon = true }.start()
     }
     stop()
   }
@@ -95,7 +110,7 @@ private class PairingServer(private val submit: (Map<String, String>) -> Unit) {
         val request = readRequest(input)
         val expected = "/pair/$token"
         when {
-          System.currentTimeMillis() >= expiresAt -> respond(connection, 410, expiredPage())
+          !running.get() || System.currentTimeMillis() >= expiresAt -> respond(connection, 410, expiredPage())
           request.path != expected -> respond(connection, 404, messagePage("This pairing link is not valid."))
           request.method == "GET" -> respond(connection, 200, formPage())
           request.method != "POST" -> respond(connection, 405, messagePage("Method not allowed."))
@@ -107,8 +122,8 @@ private class PairingServer(private val submit: (Map<String, String>) -> Unit) {
             } else if (!submitted.compareAndSet(false, true)) {
               respond(connection, 409, messagePage("This pairing code has already been used."))
             } else {
-              respond(connection, 200, successPage())
               submit(normalize(fields))
+              respond(connection, 200, successPage())
             }
           }
         }
@@ -163,13 +178,17 @@ private class PairingServer(private val submit: (Map<String, String>) -> Unit) {
     if (kind == "xtream" && (!isHttpUrl(fields["server"]) || fields["username"].isNullOrBlank() || fields["password"].isNullOrEmpty())) {
       return "Server URL, username and password are required."
     }
+    if (!fields["epgUrl"].isNullOrBlank() && !isHttpUrl(fields["epgUrl"])) return "Enter a valid http(s) EPG URL."
     for (key in listOf("name", "url", "server", "username", "password", "epgUrl", "userAgent")) {
       if ((fields[key]?.length ?: 0) > 4_096) return "One of the fields is too long."
     }
     return null
   }
 
-  private fun isHttpUrl(value: String?): Boolean = value?.trim()?.matches(Regex("https?://.+", RegexOption.IGNORE_CASE)) == true
+  private fun isHttpUrl(value: String?): Boolean = runCatching {
+    val uri = URI(value?.trim().orEmpty())
+    (uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) && !uri.host.isNullOrBlank()
+  }.getOrDefault(false)
 
   private fun normalize(fields: Map<String, String>) = mapOf(
     "kind" to fields["kind"].orEmpty(),

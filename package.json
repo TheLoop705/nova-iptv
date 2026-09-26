@@ -1,6 +1,6 @@
 {
   "name": "nova-iptv",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~57.0.16",
@@ -41,11 +41,12 @@
     "web": "EXPO_PUBLIC_PROXY_URL=http://localhost:8787 expo start --web",
     "proxy": "node server/index.mjs",
     "mock:xtream": "node server/mock-xtream.mjs",
-    "build:web": "expo export -p web && node scripts/compress-dist.mjs",
+    "build:web": "expo export -p web && node scripts/write-web-version.mjs && node scripts/compress-dist.mjs",
     "serve": "node server/index.mjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:updates": "node --test tests/updates.test.mjs"
   },
   "private": true
 }

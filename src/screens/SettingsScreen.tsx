@@ -11,7 +11,7 @@ import { Icon } from '../components/Icon';
 import type { Playlist } from '../types';
 import { formatDay, formatClock } from '../utils/format';
 import { DEFAULT_UA } from '../services/http';
-import { installedVersion, openUpdateSheet, updatesSupported, useUpdater } from '../services/updates';
+import { installedVersion, openUpdateSheet, updatesSupported, updateSource, useUpdater } from '../services/updates';
 import appJson from '../../app.json';
 
 /** Distinct titles across categories (the same item can be listed in several). */
@@ -255,13 +255,13 @@ export function SettingsScreen() {
             : updateStatus === 'downloading'
               ? `Downloading ${Math.round(updateProgress * 100)}%`
               : updateStatus === 'installing'
-                ? 'Installing…'
+                ? (Platform.OS === 'web' ? 'Reloading…' : 'Installing…')
                 : available
                   ? 'Available'
                   : updateStatus === 'current'
                     ? 'Up to date'
                     : undefined,
-        detail: `Installed: ${installedVersion()} · updates come from the GitHub releases`,
+        detail: `Installed: ${installedVersion()} · ${updateSource}`,
         run: async () => {
           const st = useUpdater.getState();
           if (st.status === 'downloading' || st.status === 'installing') return;

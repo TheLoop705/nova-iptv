@@ -47,6 +47,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test update selection and editor scrolling
+        run: npm run test:updates
+
       - name: Assign release version
         id: version
         run: node scripts/prepare-android-release.mjs
@@ -74,7 +77,7 @@ jobs:
         env:
           NODE_ENV: production
         run: |
-          ./gradlew --no-daemon clean assembleRelease -PreactNativeArchitectures=armeabi-v7a
+          ./gradlew --no-daemon clean :playlist-pairing:testDebugUnitTest assembleRelease -PreactNativeArchitectures=armeabi-v7a
           mkdir -p ../artifacts
           cp app/build/outputs/apk/release/app-release.apk ../artifacts/Nova-firetv.apk
 
