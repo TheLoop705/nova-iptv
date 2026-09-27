@@ -42,6 +42,8 @@ interface FetchOpts {
   ua?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** bytes received so far (big playlists and channel lists: shown on the loading screen) */
+  onProgress?: (bytes: number) => void;
 }
 
 async function request(url: string, opts: FetchOpts = {}): Promise<Response> {
@@ -79,7 +81,7 @@ export async function fetchJson<T = any>(url: string, opts?: FetchOpts): Promise
 
 export async function fetchText(url: string, opts?: FetchOpts): Promise<string> {
   const parts: string[] = [];
-  await streamText(url, opts ?? {}, (t) => parts.push(t));
+  await streamText(url, opts ?? {}, (t) => parts.push(t), opts?.onProgress);
   return parts.join('');
 }
 

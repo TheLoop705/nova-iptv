@@ -6,9 +6,11 @@ import type { DocOp } from '../utils/docPatch';
 
 const dir = new Directory(Paths.document, 'nova');
 
+const fileName = (key: string) => key.replace(/[^a-zA-Z0-9_.-]/g, '_');
+
 function fileFor(key: string) {
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
-  return new File(dir, key.replace(/[^a-zA-Z0-9_.-]/g, '_') + '.json');
+  return new File(dir, fileName(key) + '.json');
 }
 
 export async function getItem<T>(key: string): Promise<T | null> {
@@ -35,6 +37,17 @@ export async function removeItem(key: string): Promise<void> {
     if (f.exists) f.delete();
   } catch {
     // already gone
+  }
+}
+
+/** Removes every key that starts with `prefix` (a playlist's per-category caches). */
+export async function removeByPrefix(prefix: string): Promise<void> {
+  try {
+    if (!dir.exists) return;
+    const start = fileName(prefix);
+    for (const entry of dir.list()) if (entry instanceof File && entry.name.startsWith(start)) entry.delete();
+  } catch (e) {
+    console.warn('storage.removeByPrefix failed', prefix, e);
   }
 }
 

@@ -54,6 +54,8 @@ export function SearchScreen() {
   useEffect(() => {
     if (q.trim().length >= 2) void loadAllVod();
   }, [q, loadAllVod]);
+  // channel results show what's on now
+  useEffect(() => useLibrary.getState().wantEpg(), []);
 
   // Voice-search shortcut (hold Menu / Search key / "/") and remote users: open the keyboard right away.
   // On Fire TV the open keyboard is what lets the remote's mic button dictate into the field.

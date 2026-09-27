@@ -40,6 +40,9 @@ interface UIState {
   focusSearch: () => void;
   /** main menu rail has key focus */
   menuFocused: boolean;
+  /** Movies / Series opens on this category once (Home's "See all") */
+  browse: { kind: 'movies' | 'series'; categoryId: string } | null;
+  openCategory: (kind: 'movies' | 'series', categoryId: string) => void;
   sheet: Sheet | null;
   toast: { text: string; id: number } | null;
   setScreen: (s: Screen) => void;
@@ -59,6 +62,8 @@ export const useUI = create<UIState>((set) => ({
   searchNonce: 0,
   focusSearch: () => set((s) => ({ searchNonce: s.searchNonce + 1 })),
   menuFocused: false,
+  browse: null,
+  openCategory: (kind, categoryId) => set({ screen: kind, browse: { kind, categoryId }, menuFocused: false, detail: null }),
   sheet: null,
   toast: null,
   setScreen: (screen) => set({ screen, menuFocused: false, detail: null }),

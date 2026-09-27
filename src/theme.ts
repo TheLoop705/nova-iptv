@@ -44,6 +44,9 @@ export const colors = {
   onVideo: '#FFFFFF',
   videoScrim: 'rgba(0,0,0,0.78)',
   glass: 'rgba(255,255,255,0.14)',
+  // the page ground at partial strength: artwork fading into the page (Home's billboard)
+  bgClear: 'rgba(7,8,11,0)',
+  bgVeil: 'rgba(7,8,11,0.6)',
 };
 
 /** Monogram grounds for channel logos and poster fallbacks (white initials hold ≥7:1 on each). */

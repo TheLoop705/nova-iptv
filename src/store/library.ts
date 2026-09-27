@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Category, Channel, Group, Playlist, Program, SeriesItem, VodItem } from '../types';
 import { parseM3U } from '../services/m3u';
 import { fetchText, streamText } from '../services/http';
-import { getItem, removeItem, setItem } from '../services/storage';
+import { getItem, removeByPrefix, removeItem, setItem } from '../services/storage';
 import { buildEpgIndex } from '../services/epg';
 import { emptyEpg, mergeEpg, XmltvParser, type EpgData } from '../services/xmltv';
 import {
@@ -63,6 +63,8 @@ interface LibraryState {
 
   load: (p: Playlist, opts?: { force?: boolean }) => Promise<void>;
   refreshEpg: (force?: boolean) => Promise<void>;
+  /** the guide is needed now (Live TV, live playback, search): loads it once the channels are in */
+  wantEpg: () => void;
   loadMovieCats: () => Promise<void>;
   loadSeriesCats: () => Promise<void>;
   loadMovies: (categoryId: string) => Promise<void>;
@@ -114,19 +116,34 @@ function buildGroups(channels: Channel[]): Group[] {
 
 const current = () => useSettings.getState().playlists.find((p) => p.id === useLibrary.getState().playlistId);
 
+/** "Loading channels… 4.2 MB", at most a few times a second */
+function progressMsg(label: string, onMsg: (m: string) => void) {
+  let last = 0;
+  return (bytes: number) => {
+    const now = Date.now();
+    if (now - last < 250) return;
+    last = now;
+    onMsg(`${label} ${(bytes / 1048576).toFixed(1)} MB`);
+  };
+}
+
 async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void): Promise<PlaylistCache> {
   if (p.type === 'demo') {
     return { channels: demoChannels(), movies: [], epgUrls: [], fetchedAt: Date.now() };
   }
   if (p.type === 'xtream') {
     onMsg('Signing in…');
+    // Sign in and download the channel list at the same time; a wrong password still reports the sign-in error
+    const live = xtreamLive(p, progressMsg('Loading channels…', onMsg));
+    live.catch(() => {});
     const account = await xtreamLogin(p);
-    onMsg('Loading channels…');
-    const channels = await xtreamLive(p);
+    const channels = await live;
     return { channels, movies: [], epgUrls: [xtreamEpgUrl(p)], account, fetchedAt: Date.now() };
   }
   onMsg('Downloading playlist…');
-  const text = p.inline ? ((await getItem<string>('m3u:' + p.id)) ?? '') : await fetchText(p.url!, { ua: p.userAgent, timeoutMs: 120000 });
+  const text = p.inline
+    ? ((await getItem<string>('m3u:' + p.id)) ?? '')
+    : await fetchText(p.url!, { ua: p.userAgent, timeoutMs: 120000, onProgress: progressMsg('Downloading playlist…', onMsg) });
   if (!/#EXTM3U|#EXTINF/.test(text.slice(0, 5000))) throw new Error('This does not look like an M3U playlist.');
   onMsg('Reading channels…');
   const res = parseM3U(text);
@@ -135,18 +152,64 @@ async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void): Promise<P
 
 const shortEpgTried = new Set<string>();
 
+// The guide is loaded on first use instead of at startup: its cache alone can take seconds to read on a
+// Fire TV stick, and Home (movies and series) doesn't need it.
+let epgWanted = false;
+let epgStarted = false;
+
+// Xtream movie and series lists are cached per category and shown at once on the next start. Anything
+// older than this is fetched again in the background.
+const VOD_TTL = 12 * 3600000;
+const vodPrefix = (playlistId: string) => `vod:${playlistId}:`;
+
+/**
+ * Cache first, then network: applies the saved copy right away and refreshes it when it's old. An empty
+ * answer never replaces a saved list (overloaded panels sometimes answer with nothing) and isn't saved.
+ */
+async function cachedVod<T extends unknown[]>(playlistId: string, part: string, fetch: () => Promise<T>, apply: (v: T) => void): Promise<void> {
+  const key = vodPrefix(playlistId) + part;
+  const alive = () => useLibrary.getState().playlistId === playlistId;
+  const saved = await getItem<{ at: number; v: T }>(key);
+  if (!alive()) return;
+  if (saved) apply(saved.v);
+  if (saved && Date.now() - saved.at < VOD_TTL) return;
+  try {
+    const v = await fetch();
+    if (!alive()) return;
+    if (!v.length && saved?.v.length) return;
+    apply(v);
+    if (v.length) setItem(key, { at: Date.now(), v }).catch(() => {});
+  } catch (e) {
+    if (!saved) throw e;
+  }
+}
+
 export const useLibrary = create<LibraryState>((set, get) => ({
   ...EMPTY,
 
-  reset: () => set({ ...EMPTY }),
+  reset: () => {
+    epgWanted = epgStarted = false;
+    set({ ...EMPTY });
+  },
 
   load: async (p, opts = {}) => {
     const switching = get().playlistId !== p.id;
     if (switching) {
       shortEpgTried.clear();
+      epgWanted = epgStarted = false;
       set({ ...EMPTY, playlistId: p.id });
     }
+    if (opts.force) {
+      // "Refresh now" also re-reads movies and series
+      set({ movieCats: null, seriesCats: null, movies: {}, series: {}, vodStatus: {}, vodAllLoaded: false });
+      await removeByPrefix(vodPrefix(p.id));
+    }
     set({ status: 'loading', error: undefined, message: 'Loading playlist…' });
+    // Movies and series don't wait for the channel list, so Home can show them while channels load
+    if (p.type === 'xtream') {
+      void get().loadMovieCats();
+      void get().loadSeriesCats();
+    }
     const cacheKey = 'pl:' + p.id;
     try {
       let data = opts.force ? null : await getItem<PlaylistCache>(cacheKey);
@@ -159,7 +222,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       if (get().playlistId !== p.id) return;
       applyPlaylist(data);
       set({ status: 'ready', message: undefined });
-      void get().refreshEpg(!!opts.force);
+      if (opts.force || epgWanted) void get().refreshEpg(!!opts.force);
       // Background refresh of a stale cache
       if (stale && !opts.force && p.type !== 'demo') {
         fetchPlaylist(p, () => {})
@@ -206,10 +269,18 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }
   },
 
+  wantEpg: () => {
+    epgWanted = true;
+    if (!epgStarted && get().status === 'ready') void get().refreshEpg();
+  },
+
   refreshEpg: async (force = false) => {
     const p = current();
     if (!p) return;
+    epgStarted = true;
     const pid = p.id;
+    // Reading a big saved guide takes a moment: say so (this also holds off per-channel guide requests)
+    if (get().epgStatus !== 'ready') set({ epgStatus: 'loading', epgMessage: 'Loading TV guide…' });
     const { prefs } = useSettings.getState();
     const channels = get().channels;
     const apply = (data: EpgData) => {
@@ -233,7 +304,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (cached) apply(cached);
     const fresh = cached && Date.now() - cached.fetchedAt < prefs.epgRefreshHours * 3600000;
     if (fresh && !force) {
-      set({ epgStatus: 'ready' });
+      set({ epgStatus: 'ready', epgMessage: undefined });
       return;
     }
     if (!urls.length) {
@@ -298,21 +369,27 @@ export const useLibrary = create<LibraryState>((set, get) => ({
 
   loadMovieCats: async () => {
     const p = current();
-    if (!p || p.type !== 'xtream' || get().movieCats) return;
+    if (!p || p.type !== 'xtream' || get().movieCats || get().vodStatus.movieCats === 'loading') return;
+    const alive = () => get().playlistId === p.id;
+    set((s) => ({ vodStatus: { ...s.vodStatus, movieCats: 'loading' } }));
     try {
-      set({ movieCats: await xtreamVodCategories(p) });
-    } catch (e: any) {
-      set({ movieCats: [], vodStatus: { ...get().vodStatus, movieCats: 'error' } });
+      await cachedVod(p.id, 'movieCats', () => xtreamVodCategories(p), (movieCats) => set({ movieCats }));
+      if (alive()) set((s) => ({ movieCats: s.movieCats ?? [], vodStatus: { ...s.vodStatus, movieCats: 'ready' } }));
+    } catch {
+      if (alive()) set((s) => ({ movieCats: [], vodStatus: { ...s.vodStatus, movieCats: 'error' } }));
     }
   },
 
   loadSeriesCats: async () => {
     const p = current();
-    if (!p || p.type !== 'xtream' || get().seriesCats) return;
+    if (!p || p.type !== 'xtream' || get().seriesCats || get().vodStatus.seriesCats === 'loading') return;
+    const alive = () => get().playlistId === p.id;
+    set((s) => ({ vodStatus: { ...s.vodStatus, seriesCats: 'loading' } }));
     try {
-      set({ seriesCats: await xtreamSeriesCategories(p) });
+      await cachedVod(p.id, 'seriesCats', () => xtreamSeriesCategories(p), (seriesCats) => set({ seriesCats }));
+      if (alive()) set((s) => ({ seriesCats: s.seriesCats ?? [], vodStatus: { ...s.vodStatus, seriesCats: 'ready' } }));
     } catch {
-      set({ seriesCats: [], vodStatus: { ...get().vodStatus, seriesCats: 'error' } });
+      if (alive()) set((s) => ({ seriesCats: [], vodStatus: { ...s.vodStatus, seriesCats: 'error' } }));
     }
   },
 
@@ -322,10 +399,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (!p || p.type !== 'xtream' || get().movies[categoryId] || get().vodStatus[key] === 'loading') return;
     set({ vodStatus: { ...get().vodStatus, [key]: 'loading' } });
     try {
-      const list = await xtreamMovies(p, categoryId);
-      set((s) => ({ movies: { ...s.movies, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+      await cachedVod(p.id, key, () => xtreamMovies(p, categoryId), (list) =>
+        set((s) => ({ movies: { ...s.movies, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }))
+      );
     } catch {
-      set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
+      if (get().playlistId === p.id) set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
     }
   },
 
@@ -335,10 +413,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (!p || p.type !== 'xtream' || get().series[categoryId] || get().vodStatus[key] === 'loading') return;
     set({ vodStatus: { ...get().vodStatus, [key]: 'loading' } });
     try {
-      const list = await xtreamSeries(p, categoryId);
-      set((s) => ({ series: { ...s.series, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+      await cachedVod(p.id, key, () => xtreamSeries(p, categoryId), (list) =>
+        set((s) => ({ series: { ...s.series, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }))
+      );
     } catch {
-      set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
+      if (get().playlistId === p.id) set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
     }
   },
 
@@ -364,7 +443,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   clearCache: async (playlistId) => {
-    await Promise.all([removeItem('pl:' + playlistId), removeItem('epg:' + playlistId), removeItem('m3u:' + playlistId)]);
+    await Promise.all([removeItem('pl:' + playlistId), removeItem('epg:' + playlistId), removeItem('m3u:' + playlistId), removeByPrefix(vodPrefix(playlistId))]);
   },
 }));
 

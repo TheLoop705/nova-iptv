@@ -2,6 +2,7 @@ import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } fr
 import { useSettings, watchId } from '../store/settings';
 import { useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
+import { useUI } from '../store/ui';
 import { xtreamMovieInfo, xtreamMovieUrl, xtreamSeriesInfo } from './xtream';
 import { demoSeriesInfo } from './demo';
 
@@ -108,10 +109,50 @@ export async function continueSeries(series: SeriesItem, ep: Episode) {
   playEpisode(series, next ?? ep);
 }
 
-export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
+/** Recently fetched movie details, so Home's billboard and the detail page don't ask twice. */
+const movieInfoCache = new Map<string, Promise<MovieInfo | null>>();
+const movieInfoDone = new Map<string, MovieInfo | null>();
+const MOVIE_INFO_MAX = 300;
+const movieInfoKey = (item: VodItem) => `${useLibrary.getState().playlistId}:${item.streamId}`;
+
+export function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
   const p = activePlaylist();
-  if (p?.type === 'xtream' && item.streamId) return xtreamMovieInfo(p, item.streamId);
-  return null;
+  if (p?.type !== 'xtream' || !item.streamId) return Promise.resolve(null);
+  const key = movieInfoKey(item);
+  const hit = movieInfoCache.get(key);
+  if (hit) return hit;
+  const req = xtreamMovieInfo(p, item.streamId);
+  movieInfoCache.set(key, req);
+  req.then(
+    (info) => movieInfoDone.set(key, info),
+    () => movieInfoCache.delete(key) // failures aren't remembered
+  );
+  if (movieInfoCache.size > MOVIE_INFO_MAX) {
+    const oldest = movieInfoCache.keys().next().value!;
+    movieInfoCache.delete(oldest);
+    movieInfoDone.delete(oldest);
+  }
+  return req;
+}
+
+/** Movie details that have already arrived (undefined when not fetched yet), without a request. */
+export function peekMovieInfo(item: VodItem): MovieInfo | null | undefined {
+  return item.streamId ? movieInfoDone.get(movieInfoKey(item)) : null;
+}
+
+/** Home's Play on a series: carry on where you left it, else start the first episode. */
+export async function playSeries(series: SeriesItem) {
+  const pid = useLibrary.getState().playlistId;
+  const last = pid ? useSettings.getState().history[pid]?.find((h) => h.kind === 'episode' && h.series.id === series.id) : undefined;
+  if (last?.kind === 'episode') return continueSeries(last.series, last.episode);
+  let info = seriesInfoCache.get(series.seriesId) ?? null;
+  if (!info) {
+    useUI.getState().showToast('Loading episodes…');
+    info = await loadSeriesInfo(series).catch(() => null);
+  }
+  const first = info?.seasons.find((s) => s.episodes.length)?.episodes[0];
+  if (first) playEpisode(series, first);
+  else useUI.getState().setDetail({ kind: 'series', item: series });
 }
 
 export async function loadSeriesInfo(item: SeriesItem): Promise<SeriesInfo | null> {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, BackHandler, Platform, Pressable, Text, View } from 'react-native';
+import { BackHandler, Platform, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, useLayout } from '../theme';
 import { useUI, type Screen } from '../store/ui';
@@ -12,6 +12,7 @@ import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
 import { NovaMark } from '../components/NovaMark';
+import { LoadingScreen } from '../components/LoadingScreen';
 import { GuideScreen } from './GuideScreen';
 import { HomeScreen } from './HomeScreen';
 import { VodScreen } from './VodScreen';
@@ -221,8 +222,17 @@ function RailHint({ label, shortcut }: { label: string; shortcut?: string }) {
 function Content({ screen }: { screen: Screen }) {
   const status = useLibrary((st) => st.status);
   const hasChannels = useLibrary((st) => st.channels.length > 0);
-  if (!hasChannels && (status === 'loading' || status === 'idle')) return <Loading />;
-  if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
+  const xtream = useActivePlaylist()?.type === 'xtream';
+  // Xtream movies and series load on their own (and from their cache), so those screens don't wait for the
+  // channel list; they show their own loading state until their categories are in. A failed sign-in still
+  // shows the error, so an expired account never looks like a working library.
+  const vodScreen = xtream && (screen === 'home' || screen === 'movies' || screen === 'series');
+  if (vodScreen) {
+    if (status === 'error') return <LoadError />;
+  } else {
+    if (!hasChannels && (status === 'loading' || status === 'idle')) return <LoadingScreen />;
+    if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
+  }
   switch (screen) {
     case 'home':
       return <HomeScreen />;
@@ -237,19 +247,6 @@ function Content({ screen }: { screen: Screen }) {
     case 'settings':
       return <SettingsScreen />;
   }
-}
-
-function Loading() {
-  const { k, type } = useLayout();
-  const message = useLibrary((st) => st.message);
-  const playlist = useActivePlaylist();
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator size="large" color={colors.accent} />
-      <Text style={[type('heading'), { color: colors.text, marginTop: k(16) }]}>{playlist?.name}</Text>
-      <Text style={[type('caption'), { color: colors.textDim, marginTop: k(4) }]}>{message ?? 'Loading…'}</Text>
-    </View>
-  );
 }
 
 function LoadError() {

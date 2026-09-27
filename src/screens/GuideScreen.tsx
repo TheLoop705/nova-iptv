@@ -50,6 +50,9 @@ export function GuideScreen() {
   const fullscreen = usePlayer((st) => st.fullscreen);
   const now = useNow(15000);
 
+  // The guide data loads on first visit rather than at startup
+  useEffect(() => useLibrary.getState().wantEpg(), []);
+
   const [groupId, setGroupId] = useState(lastGroup ?? ALL);
   const group = groups.find((g) => g.id === groupId) ?? groups.find((g) => g.id === ALL)!;
   const channels = useMemo(() => (group ? (group.channelIds.map((id) => byId[id]).filter(Boolean) as Channel[]) : []), [group, byId]);

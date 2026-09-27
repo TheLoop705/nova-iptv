@@ -75,6 +75,8 @@ export interface SeriesItem {
   year?: string;
   plot?: string;
   genre?: string;
+  /** wide artwork (Xtream lists it with the series), used by Home's billboard */
+  backdrop?: string;
 }
 
 export interface Episode {

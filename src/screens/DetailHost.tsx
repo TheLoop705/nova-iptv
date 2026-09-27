@@ -265,7 +265,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
 
   return (
     <View style={{ flex: 1 }}>
-      <Backdrop uri={info?.backdrop || poster} />
+      <Backdrop uri={info?.backdrop || item.backdrop || poster} />
       {header}
       {!info && !error ? <ActivityIndicator color={colors.accent} size="large" style={{ marginTop: k(30) }} /> : null}
       {error ? <Text style={{ color: colors.live, margin: k(28) }}>{error}</Text> : null}
