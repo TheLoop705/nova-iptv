@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Linking, Platform, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors, fonts, useLayout } from './theme';
 import { useActivePlaylist, useSettings } from './store/settings';
@@ -19,8 +20,22 @@ import { VideoLayer } from './player/VideoLayer';
 import { PlayerOverlay } from './player/PlayerOverlay';
 import { SheetHost, Toast } from './components/SheetHost';
 import { UpdateProgress } from './components/UpdateProgress';
+import { BootScreen } from './components/LoadingScreen';
 import { useAutoUpdateCheck } from './services/updates';
 import { usePlayback } from './player/playback';
+
+// Keep the launch screen up until settings are read, so startup goes splash → Nova without a blank frame
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+
+/** Retires the launch screen: the native splash, or the web page's own (public/index.html). */
+function hideSplash() {
+  void SplashScreen.hideAsync().catch(() => {});
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+  const el = document.getElementById('nova-splash');
+  if (!el) return;
+  el.style.opacity = '0';
+  setTimeout(() => el.remove(), 250);
+}
 
 if (__DEV__ && Platform.OS === 'web' && typeof window !== 'undefined') {
   // handy for poking at state from the browser console while developing
@@ -47,8 +62,17 @@ function Root() {
   useAutoUpdateCheck();
 
   useEffect(() => {
-    void useSettings.getState().hydrate();
-    return startRemote();
+    // never keep the splash up for long, even if reading settings stalls
+    const fallback = setTimeout(hideSplash, 4000);
+    void useSettings.getState().hydrate().finally(() => {
+      clearTimeout(fallback);
+      requestAnimationFrame(hideSplash);
+    });
+    const stop = startRemote();
+    return () => {
+      clearTimeout(fallback);
+      stop();
+    };
   }, []);
 
   // Voice/search shortcut works from every screen, including the fullscreen player
@@ -106,7 +130,7 @@ function Root() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <StatusBar style="light" hidden={mode === 'tv' || fullscreen} />
-      {!hydrated ? null : hasPlaylists ? <Shell /> : <Onboarding />}
+      {!hydrated ? <BootScreen /> : hasPlaylists ? <Shell /> : <Onboarding />}
       <DetailHost />
       {editor ? <PlaylistEditor /> : null}
       <VideoLayer />

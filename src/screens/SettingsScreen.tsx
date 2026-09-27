@@ -69,6 +69,7 @@ export function SettingsScreen() {
   const counting = active?.type === 'xtream' && !vodAllLoaded;
   useEffect(() => {
     if (active?.type === 'xtream') void useLibrary.getState().loadAllVod();
+    useLibrary.getState().wantEpg(); // guide status and count
   }, [active?.id, active?.type]);
 
   const playlistSheet = (p: Playlist) =>

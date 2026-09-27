@@ -24,20 +24,20 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 
 | Home | Live TV |
 | --- | --- |
-| ![Home: recently watched on the left, search on the right](docs/screenshots/home.png) | ![Live TV: categories, channels with what's on now, and the guide grid](docs/screenshots/live-tv.png) |
+| ![Home: the focused title's details above rows of posters, Continue watching first](docs/screenshots/home.png) | ![Live TV: categories, channels with what's on now, and the guide grid](docs/screenshots/live-tv.png) |
 | **Player** | **Series** |
 | ![Player: controls, seek bar and the skip indicator](docs/screenshots/player.png) | ![Series: watched and in-progress episodes](docs/screenshots/series.png) |
 | **Movie** | **Movies** |
 | ![Movie details with resume and watched state](docs/screenshots/movie.png) | ![Movie categories and poster grid](docs/screenshots/movies.png) |
 
 <p>
-  <img src="docs/screenshots/phone-home.png" width="260" alt="Home on a phone">
+  <img src="docs/screenshots/phone-home.png" width="260" alt="Home on a phone: a featured title, then rows of posters">
   <img src="docs/screenshots/phone-live.png" width="260" alt="Live TV on a phone">
 </p>
 
 ## Features
 
-- **Home** (the start page) is split in two. On the left, *Recently watched* mixes live channels, movies and series episodes, newest first, with when you watched them and where you left off. Selecting a series continues it (the next episode once one is finished). On the right is a big **Search** button.
+- **Home** (the start page) is for movies and series, laid out like Netflix; live channels stay in Live TV. On TV and desktop a billboard at the top shows the focused title: artwork, year, genre, running time, rating, plot, and *Play*/*Resume*, *More info* (or *Episodes*) and *My List*. Press ▲ from the first row to reach those buttons. Below are rows of posters: *Continue watching* (movies you stopped part way, and each series you've started, where OK carries on), *My List* (your favourite movies and series), then categories. Categories you've starred come first, then the ones you've been watching from, then movies and series alternating in your provider's order. Long rows end in a *See all* card that opens the category in Movies or Series. On phones, a featured title card sits above the same rows. With a mouse, the billboard follows the pointer and arrows at the ends of a row page through it.
 - **Watch progress** for every movie and episode: resume points, "12 min left", and a *Watched* mark once finished (or set by hand). It's kept when the page reloads, and on the web it's shared between browsers through the Nova server.
 - **Live TV guide (EPG grid)**: categories, channels with what's on now, and the timeline grid side by side, with a slim programme strip and live preview on top, a now-line, and number-key channel entry.
 - **Favorite categories**: star any Live TV, movie or series category from its menu and it moves to the top of the list.
@@ -197,5 +197,7 @@ Proxy safety:
 
 ## Notes
 
-- Guide data is cached (IndexedDB on web, JSON files in the app's documents directory on native) and refreshed every 12 h by default (Settings → TV Guide).
+- **Startup**: Nova shows its launch screen until settings are read, then the library it saved last time, and refreshes in the background. A playlist loading for the first time shows a loading screen with what's happening ("Loading channels… 4.2 MB"). On Xtream, Home, Movies and Series don't wait for the channel list: sign-in, channels and movie/series categories are requested at the same time, and each Home row loads its category when it comes near the screen.
+- **Caches** (IndexedDB on web, JSON files in the app's documents directory on native): the channel list (refreshed in the background after 24 h), Xtream movie and series categories and each category's titles (after 12 h; an empty answer from the provider never replaces a saved list), and the guide. *Refresh now* on a playlist re-reads all of them.
+- Guide data loads the first time it's needed (Live TV, a live channel, Search or Settings), not at startup, and is refreshed every 12 h by default (Settings → TV Guide).
 - The default User-Agent is `Nova/1.0 … ExoPlayerLib/2.19.1`. Some providers require a specific one: set it per playlist or globally in Settings.

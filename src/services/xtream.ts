@@ -38,6 +38,8 @@ function api(p: Playlist, action?: string, extra: Record<string, string | number
 }
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : v && typeof v === 'object' ? (Object.values(v) as T[]) : []);
+/** List entries that carry `key` (a panel refusing a request answers with an account object instead of a list). */
+const rows = (v: unknown, key: string): any[] => arr<any>(v).filter((x) => x && typeof x === 'object' && x[key] != null);
 
 export async function xtreamLogin(p: Playlist): Promise<XtreamAccount> {
   const data = await fetchJson<any>(api(p), { ua: p.userAgent, timeoutMs: 20000 });
@@ -54,10 +56,10 @@ export async function xtreamLogin(p: Playlist): Promise<XtreamAccount> {
   };
 }
 
-export async function xtreamLive(p: Playlist): Promise<Channel[]> {
+export async function xtreamLive(p: Playlist, onProgress?: (bytes: number) => void): Promise<Channel[]> {
   const [cats, streams] = await Promise.all([
     fetchJson<any[]>(api(p, 'get_live_categories'), { ua: p.userAgent }),
-    fetchJson<any[]>(api(p, 'get_live_streams'), { ua: p.userAgent, timeoutMs: 120000 }),
+    fetchJson<any[]>(api(p, 'get_live_streams'), { ua: p.userAgent, timeoutMs: 120000, onProgress }),
   ]);
   const catName = new Map<string, string>();
   for (const c of arr<any>(cats)) catName.set(String(c.category_id), String(c.category_name ?? ''));
@@ -85,18 +87,18 @@ export async function xtreamLive(p: Playlist): Promise<Channel[]> {
 
 export async function xtreamVodCategories(p: Playlist): Promise<Category[]> {
   const cats = await fetchJson<any[]>(api(p, 'get_vod_categories'), { ua: p.userAgent });
-  return arr<any>(cats).map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
+  return rows(cats, 'category_id').map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
 }
 
 export async function xtreamSeriesCategories(p: Playlist): Promise<Category[]> {
   const cats = await fetchJson<any[]>(api(p, 'get_series_categories'), { ua: p.userAgent });
-  return arr<any>(cats).map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
+  return rows(cats, 'category_id').map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
 }
 
 export async function xtreamMovies(p: Playlist, categoryId?: string): Promise<VodItem[]> {
   const url = categoryId ? api(p, 'get_vod_streams', { category_id: categoryId }) : api(p, 'get_vod_streams');
   const list = await fetchJson<any[]>(url, { ua: p.userAgent, timeoutMs: 120000 });
-  return arr<any>(list).map((s) => ({
+  return rows(list, 'stream_id').map((s) => ({
     id: 'v' + s.stream_id,
     name: String(s.name ?? ''),
     poster: s.stream_icon || undefined,
@@ -111,7 +113,7 @@ export async function xtreamMovies(p: Playlist, categoryId?: string): Promise<Vo
 export async function xtreamSeries(p: Playlist, categoryId?: string): Promise<SeriesItem[]> {
   const url = categoryId ? api(p, 'get_series', { category_id: categoryId }) : api(p, 'get_series');
   const list = await fetchJson<any[]>(url, { ua: p.userAgent, timeoutMs: 120000 });
-  return arr<any>(list).map((s) => ({
+  return rows(list, 'series_id').map((s) => ({
     id: 's' + s.series_id,
     seriesId: Number(s.series_id),
     name: String(s.name ?? ''),
@@ -121,6 +123,7 @@ export async function xtreamSeries(p: Playlist, categoryId?: string): Promise<Se
     year: s.releaseDate ? String(s.releaseDate).slice(0, 4) : s.year ? String(s.year) : undefined,
     plot: s.plot || undefined,
     genre: s.genre || undefined,
+    backdrop: arr<string>(s.backdrop_path).find((b) => typeof b === 'string' && b) || undefined,
   }));
 }
 
