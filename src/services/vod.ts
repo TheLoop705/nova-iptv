@@ -144,7 +144,7 @@ export function seriesResumePoint(series: SeriesItem, info: SeriesInfo): ResumeP
 
 /**
  * Carry a series on where you left it (see seriesResumePoint), or start the first episode. `ep` is the
- * episode Home's Continue watching remembers, used if the episode list can't be loaded.
+ * episode Home's Recently watched remembers, used if the episode list can't be loaded.
  */
 export async function continueSeries(series: SeriesItem, ep?: Episode) {
   let info = seriesInfoCache.get(series.seriesId) ?? null;

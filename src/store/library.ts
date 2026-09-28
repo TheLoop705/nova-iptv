@@ -6,6 +6,7 @@ import { getItem, removeByPrefix, removeItem, setItem } from '../services/storag
 import { buildEpgIndex } from '../services/epg';
 import { emptyEpg, mergeEpg, XmltvParser, type EpgData } from '../services/xmltv';
 import {
+  AuthError,
   xtreamEpgUrl,
   xtreamLive,
   xtreamLogin,
@@ -29,19 +30,31 @@ import { favCatKey, useSettings } from './settings';
 
 interface PlaylistCache {
   channels: Channel[];
-  movies: VodItem[];
+  /** M3U movies. Saved on their own (`plvod:`) so Home can read them without the channel list; older caches keep them here. */
+  movies?: VodItem[];
   epgUrls: string[];
   account?: XtreamAccount;
   fetchedAt: number;
 }
 
+interface M3uVodCache {
+  movies: VodItem[];
+  fetchedAt: number;
+}
+
+const PLAYLIST_TTL = 24 * 3600000;
+
 type Status = 'idle' | 'loading' | 'ready' | 'error';
 
 interface LibraryState {
   playlistId?: string;
+  /** Live TV channels: loaded when Live TV (or Search) is opened, not at startup */
   status: Status;
   message?: string;
   error?: string;
+  /** movies and series (and for Xtream, signing in): what Home, Movies and Series need */
+  catalogStatus: Status;
+  catalogError?: string;
   channels: Channel[];
   byId: Record<string, Channel>;
   groups: Group[];
@@ -61,10 +74,14 @@ interface LibraryState {
   series: Record<string, SeriesItem[]>;
   vodStatus: Record<string, Status>;
 
+  /** opens a playlist: movies and series (and the channels too if Live TV is already in use) */
   load: (p: Playlist, opts?: { force?: boolean }) => Promise<void>;
+  /** the channel list is needed now (Live TV, Search, starting with the last channel) */
+  wantChannels: () => void;
+  loadChannels: (opts?: { force?: boolean }) => Promise<void>;
   refreshEpg: (force?: boolean) => Promise<void>;
   /** the guide is needed now (Live TV, live playback, search): loads it once the channels are in */
-  wantEpg: () => void;
+  wantEpg: (force?: boolean) => void;
   loadMovieCats: () => Promise<void>;
   loadSeriesCats: () => Promise<void>;
   loadMovies: (categoryId: string) => Promise<void>;
@@ -82,6 +99,8 @@ const EMPTY = {
   status: 'idle' as Status,
   message: undefined,
   error: undefined,
+  catalogStatus: 'idle' as Status,
+  catalogError: undefined,
   channels: [] as Channel[],
   byId: {} as Record<string, Channel>,
   groups: [] as Group[],
@@ -127,18 +146,19 @@ function progressMsg(label: string, onMsg: (m: string) => void) {
   };
 }
 
-async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void): Promise<PlaylistCache> {
+/** `account`: Xtream already signed in (at startup), so fetching the channels doesn't sign in again. */
+async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void, account?: XtreamAccount): Promise<PlaylistCache> {
   if (p.type === 'demo') {
     return { channels: demoChannels(), movies: [], epgUrls: [], fetchedAt: Date.now() };
   }
   if (p.type === 'xtream') {
-    onMsg('Signing in…');
+    onMsg(account ? 'Loading channels…' : 'Signing in…');
     // Sign in and download the channel list at the same time; a wrong password still reports the sign-in error
     const live = xtreamLive(p, progressMsg('Loading channels…', onMsg));
     live.catch(() => {});
-    const account = await xtreamLogin(p);
+    const signedIn = account ?? (await xtreamLogin(p));
     const channels = await live;
-    return { channels, movies: [], epgUrls: [xtreamEpgUrl(p)], account, fetchedAt: Date.now() };
+    return { channels, movies: [], epgUrls: [xtreamEpgUrl(p)], account: signedIn, fetchedAt: Date.now() };
   }
   onMsg('Downloading playlist…');
   const text = p.inline
@@ -156,6 +176,9 @@ const shortEpgTried = new Set<string>();
 // Fire TV stick, and Home (movies and series) doesn't need it.
 let epgWanted = false;
 let epgStarted = false;
+let epgForce = false;
+// Live TV has been opened for this playlist: a "Refresh now" reloads its channels too
+let channelsWanted = false;
 
 // Xtream movie and series lists are cached per category and shown at once on the next start. Anything
 // older than this is fetched again in the background.
@@ -188,7 +211,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   ...EMPTY,
 
   reset: () => {
-    epgWanted = epgStarted = false;
+    epgWanted = epgStarted = epgForce = channelsWanted = false;
     set({ ...EMPTY });
   },
 
@@ -196,82 +219,116 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const switching = get().playlistId !== p.id;
     if (switching) {
       shortEpgTried.clear();
-      epgWanted = epgStarted = false;
+      epgWanted = epgStarted = epgForce = channelsWanted = false;
       set({ ...EMPTY, playlistId: p.id });
     }
+    const alive = () => get().playlistId === p.id;
     if (opts.force) {
-      // "Refresh now" also re-reads movies and series
+      // "Refresh now" re-reads everything; a channel list not in use is fetched fresh when Live TV opens
       set({ movieCats: null, seriesCats: null, movies: {}, series: {}, vodStatus: {}, vodAllLoaded: false });
-      await removeByPrefix(vodPrefix(p.id));
+      await Promise.all([removeByPrefix(vodPrefix(p.id)), removeItem('plvod:' + p.id), ...(channelsWanted ? [] : [removeItem('pl:' + p.id)])]);
     }
-    set({ status: 'loading', error: undefined, message: 'Loading playlist…' });
-    // Movies and series don't wait for the channel list, so Home can show them while channels load
-    if (p.type === 'xtream') {
-      void get().loadMovieCats();
-      void get().loadSeriesCats();
-    }
-    const cacheKey = 'pl:' + p.id;
-    try {
-      let data = opts.force ? null : await getItem<PlaylistCache>(cacheKey);
-      const stale = !!data && Date.now() - data.fetchedAt > 24 * 3600000;
-      if (data && p.type === 'demo') data = null; // always regenerate demo
-      if (!data) {
-        data = await fetchPlaylist(p, (m) => set({ message: m }));
-        if (p.type !== 'demo') await setItem(cacheKey, data);
-      }
-      if (get().playlistId !== p.id) return;
-      applyPlaylist(data);
-      set({ status: 'ready', message: undefined });
-      if (opts.force || epgWanted) void get().refreshEpg(!!opts.force);
-      // Background refresh of a stale cache
-      if (stale && !opts.force && p.type !== 'demo') {
-        fetchPlaylist(p, () => {})
-          .then(async (fresh) => {
-            await setItem(cacheKey, fresh);
-            if (get().playlistId === p.id) applyPlaylist(fresh);
-          })
-          .catch(() => {});
-      }
-    } catch (e: any) {
-      if (get().playlistId !== p.id) return;
-      set({ status: 'error', error: e?.message ?? String(e), message: undefined });
+    set({ catalogStatus: 'loading', catalogError: undefined });
+    if (channelsWanted) void get().loadChannels({ force: opts.force });
+    const fail = (e: unknown) => alive() && set({ catalogStatus: 'error', catalogError: (e as Error)?.message ?? String(e), message: undefined });
+
+    if (p.type === 'demo') {
+      applyMovies(demoMovies());
+      set({ catalogStatus: 'ready' });
+      return;
     }
 
-    function applyPlaylist(data: PlaylistCache) {
-      const byId: Record<string, Channel> = {};
-      for (const c of data.channels) byId[c.id] = c;
-      const movieCats =
-        p.type === 'demo'
-          ? demoMovieCats
-          : p.type === 'm3u'
-            ? [...new Set(data.movies.map((m) => m.categoryId))].map((c) => ({ id: c, name: c }))
-            : get().movieCats;
-      const movies: Record<string, VodItem[]> = p.type === 'xtream' ? get().movies : {};
-      if (p.type === 'm3u') {
-        for (const m of data.movies) (movies[m.categoryId] ??= []).push(m);
-      } else if (p.type === 'demo') {
-        for (const m of demoMovies()) (movies[m.categoryId] ??= []).push(m);
+    if (p.type === 'xtream') {
+      // Movies and series load per category as they're shown (cache first). Signing in runs alongside: it
+      // gets the account details and catches a wrong password or an expired account, which a saved
+      // library would otherwise hide. A network hiccup here stays quiet.
+      xtreamLogin(p).then(
+        (account) => alive() && set({ account }),
+        (e) => e instanceof AuthError && fail(e)
+      );
+      void get().loadMovieCats();
+      void get().loadSeriesCats();
+      set({ catalogStatus: 'ready' });
+      return;
+    }
+
+    // M3U: the movies come from the playlist file
+    try {
+      const vodKey = 'plvod:' + p.id;
+      let vod = opts.force ? null : await getItem<M3uVodCache>(vodKey);
+      if (!vod && !opts.force) {
+        // saved before movies were kept apart: read the old copy once
+        const legacy = await getItem<PlaylistCache>('pl:' + p.id);
+        if (legacy?.movies) {
+          vod = { movies: legacy.movies, fetchedAt: legacy.fetchedAt };
+          setItem(vodKey, vod).catch(() => {});
+        }
       }
-      const series: Record<string, SeriesItem[]> = p.type === 'xtream' ? get().series : {};
-      if (p.type === 'demo') for (const s of demoSeries()) (series[s.categoryId] ??= []).push(s);
-      set({
-        channels: data.channels,
-        byId,
-        groups: buildGroups(data.channels),
-        epgUrls: data.epgUrls,
-        account: data.account,
-        fetchedAt: data.fetchedAt,
-        movieCats,
-        seriesCats: p.type === 'demo' ? demoSeriesCats : p.type === 'm3u' ? [] : get().seriesCats,
-        movies,
-        series,
-      });
+      if (!alive()) return;
+      if (vod) {
+        applyMovies(vod.movies);
+        set({ catalogStatus: 'ready' });
+        if (Date.now() - vod.fetchedAt > PLAYLIST_TTL) {
+          fetchPlaylist(p, () => {})
+            .then((fresh) => savePlaylist(p, fresh))
+            .catch(() => {});
+        }
+        return;
+      }
+      const data = await fetchPlaylist(p, (m) => alive() && set({ message: m }));
+      await savePlaylist(p, data);
+      if (alive()) set({ catalogStatus: 'ready', message: undefined });
+    } catch (e) {
+      fail(e);
     }
   },
 
-  wantEpg: () => {
+  wantChannels: () => {
+    channelsWanted = true;
+    if (get().status === 'idle') void get().loadChannels();
+  },
+
+  loadChannels: async (opts = {}) => {
+    const p = current();
+    if (!p) return;
+    if (!opts.force && (get().status === 'loading' || get().status === 'ready')) return;
+    channelsWanted = true;
+    const alive = () => get().playlistId === p.id;
+    set({ status: 'loading', error: undefined, message: 'Loading channels…' });
+    const cacheKey = 'pl:' + p.id;
+    try {
+      let data = opts.force || p.type === 'demo' ? null : await getItem<PlaylistCache>(cacheKey);
+      const stale = !!data && Date.now() - data.fetchedAt > PLAYLIST_TTL;
+      if (!data) {
+        data = await fetchPlaylist(p, (m) => alive() && set({ message: m }), get().account);
+        await savePlaylist(p, data);
+      }
+      if (!alive()) return;
+      applyChannels(data);
+      set({ status: 'ready', message: undefined });
+      if (opts.force || epgWanted) {
+        const force = !!opts.force || epgForce;
+        epgForce = false;
+        void get().refreshEpg(force);
+      }
+      // Background refresh of a stale cache
+      if (stale && !opts.force && p.type !== 'demo') {
+        fetchPlaylist(p, () => {}, get().account)
+          .then((fresh) => savePlaylist(p, fresh))
+          .catch(() => {});
+      }
+    } catch (e: any) {
+      if (alive()) set({ status: 'error', error: e?.message ?? String(e), message: undefined });
+    }
+  },
+
+  wantEpg: (force = false) => {
     epgWanted = true;
-    if (!epgStarted && get().status === 'ready') void get().refreshEpg();
+    if (force) epgForce = true;
+    if (get().status !== 'ready' || (epgStarted && !epgForce)) return;
+    const f = epgForce;
+    epgForce = false;
+    void get().refreshEpg(f);
   },
 
   refreshEpg: async (force = false) => {
@@ -375,8 +432,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     try {
       await cachedVod(p.id, 'movieCats', () => xtreamVodCategories(p), (movieCats) => set({ movieCats }));
       if (alive()) set((s) => ({ movieCats: s.movieCats ?? [], vodStatus: { ...s.vodStatus, movieCats: 'ready' } }));
-    } catch {
-      if (alive()) set((s) => ({ movieCats: [], vodStatus: { ...s.vodStatus, movieCats: 'error' } }));
+    } catch (e: any) {
+      if (alive()) set((s) => ({ movieCats: [], catalogError: s.catalogError ?? e?.message, vodStatus: { ...s.vodStatus, movieCats: 'error' } }));
     }
   },
 
@@ -388,8 +445,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     try {
       await cachedVod(p.id, 'seriesCats', () => xtreamSeriesCategories(p), (seriesCats) => set({ seriesCats }));
       if (alive()) set((s) => ({ seriesCats: s.seriesCats ?? [], vodStatus: { ...s.vodStatus, seriesCats: 'ready' } }));
-    } catch {
-      if (alive()) set((s) => ({ seriesCats: [], vodStatus: { ...s.vodStatus, seriesCats: 'error' } }));
+    } catch (e: any) {
+      if (alive()) set((s) => ({ seriesCats: [], catalogError: s.catalogError ?? e?.message, vodStatus: { ...s.vodStatus, seriesCats: 'error' } }));
     }
   },
 
@@ -443,9 +500,64 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   },
 
   clearCache: async (playlistId) => {
-    await Promise.all([removeItem('pl:' + playlistId), removeItem('epg:' + playlistId), removeItem('m3u:' + playlistId), removeByPrefix(vodPrefix(playlistId))]);
+    await Promise.all([
+      removeItem('pl:' + playlistId),
+      removeItem('plvod:' + playlistId),
+      removeItem('epg:' + playlistId),
+      removeItem('m3u:' + playlistId),
+      removeByPrefix(vodPrefix(playlistId)),
+    ]);
   },
 }));
+
+// ---- applying loaded data ----
+
+/** Movies (and series) that come with the playlist itself: M3U VOD entries, the demo. */
+function applyMovies(list: VodItem[]) {
+  const p = current();
+  const movies: Record<string, VodItem[]> = {};
+  for (const m of list) (movies[m.categoryId] ??= []).push(m);
+  const series: Record<string, SeriesItem[]> = {};
+  if (p?.type === 'demo') for (const s of demoSeries()) (series[s.categoryId] ??= []).push(s);
+  useLibrary.setState({
+    movieCats: p?.type === 'demo' ? demoMovieCats : Object.keys(movies).map((c) => ({ id: c, name: c })),
+    seriesCats: p?.type === 'demo' ? demoSeriesCats : [],
+    movies,
+    series,
+  });
+}
+
+function applyChannels(data: PlaylistCache) {
+  const byId: Record<string, Channel> = {};
+  for (const c of data.channels) byId[c.id] = c;
+  useLibrary.setState((s) => ({
+    channels: data.channels,
+    byId,
+    groups: buildGroups(data.channels),
+    epgUrls: data.epgUrls,
+    // a fresh sign-in beats the account saved with the channels
+    account: s.account ?? data.account,
+    fetchedAt: data.fetchedAt,
+  }));
+}
+
+/**
+ * Saves a freshly fetched playlist. M3U keeps its movies apart from the channels, so opening the app reads
+ * only the movies. Whatever of it is already on screen is updated.
+ */
+async function savePlaylist(p: Playlist, data: PlaylistCache) {
+  if (p.type === 'm3u') {
+    const { movies = [], ...channels } = data;
+    await Promise.all([setItem('pl:' + p.id, channels), setItem('plvod:' + p.id, { movies, fetchedAt: data.fetchedAt })]);
+  } else if (p.type === 'xtream') {
+    await setItem('pl:' + p.id, data);
+  }
+  const lib = useLibrary.getState();
+  if (lib.playlistId !== p.id) return;
+  if (p.type === 'm3u') applyMovies(data.movies ?? []);
+  if (lib.status === 'ready') applyChannels(data);
+}
+
 
 // ---- derived groups, including virtual ones (Favorites / Recent / All) ----
 

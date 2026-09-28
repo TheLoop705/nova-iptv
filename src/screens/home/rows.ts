@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import type { Category, Episode, SeriesItem, VodItem } from '../../types';
 import { useLibrary } from '../../store/library';
 import { favCatKey, useSettings, type WatchEntry } from '../../store/settings';
-import { movieKey } from '../../services/vod';
 
 export type VodKind = 'movies' | 'series';
 
@@ -20,7 +19,7 @@ export interface HomeRow {
   kindLabel?: string;
   kind?: VodKind;
   categoryId?: string;
-  /** Continue watching: OK plays straight away instead of opening the details */
+  /** Recently watched: OK plays straight away (resuming) instead of opening the details */
   resume?: boolean;
   entries: HomeEntry[];
   /** a category whose titles haven't arrived yet */
@@ -31,7 +30,7 @@ export interface HomeRow {
 export const ROW_MAX = 30;
 /** Category rows on Home. Every other category is still in Movies / Series. */
 const CATEGORY_ROWS = 40;
-const CONTINUE_MAX = 20;
+const RECENT_MAX = 30;
 
 // Cards are cached per list so a row keeps its identity (and skips re-rendering) while other rows load
 const entryCache = new WeakMap<object, HomeEntry[]>();
@@ -48,7 +47,7 @@ function categoryEntries(list: (VodItem | SeriesItem)[], kind: VodKind, cat: Cat
 }
 
 /**
- * Home's rows, Netflix style: Continue watching, My List, then categories — starred ones first, then the
+ * Home's rows, Netflix style: Recently watched, My List, then categories — starred ones first, then the
  * ones you've been watching from, then movies and series alternating in the provider's order.
  * Live TV stays in the guide.
  */
@@ -61,26 +60,22 @@ export function useHomeRows(): { rows: HomeRow[]; catsKnown: boolean } {
   const vodStatus = useLibrary((st) => st.vodStatus);
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
-  const progress = useSettings((st) => st.vodProgress);
   const favMovieCats = useSettings((st) => (pid ? st.favCategories[favCatKey(pid, 'movies')] : undefined));
   const favSeriesCats = useSettings((st) => (pid ? st.favCategories[favCatKey(pid, 'series')] : undefined));
 
   const watched = useMemo(() => [...(history ?? [])].filter((h) => h.kind !== 'live').sort((a, b) => b.at - a.at), [history]);
 
-  // Movies you stopped part way and every series you've started, newest first
+  // Movies and TV shows you've watched, newest first (live channels stay in Live TV). OK resumes a movie, or
+  // carries a show on from its episode (the next one once it's finished).
   const resume = useMemo(() => {
     const out: HomeEntry[] = [];
     for (const h of watched) {
-      if (out.length >= CONTINUE_MAX) break;
-      if (h.kind === 'movie') {
-        const pr = progress[movieKey(h.item)];
-        if (pr && pr.pos > 0) out.push({ type: 'movie', key: 'c:' + h.id, item: h.item, historyId: h.id });
-      } else if (h.kind === 'episode') {
-        out.push({ type: 'series', key: 'c:' + h.id, item: h.series, episode: h.episode, historyId: h.id });
-      }
+      if (out.length >= RECENT_MAX) break;
+      if (h.kind === 'movie') out.push({ type: 'movie', key: 'c:' + h.id, item: h.item, historyId: h.id });
+      else if (h.kind === 'episode') out.push({ type: 'series', key: 'c:' + h.id, item: h.series, episode: h.episode, historyId: h.id });
     }
     return out;
-  }, [watched, progress]);
+  }, [watched]);
 
   const myList = useMemo(
     () =>
@@ -122,7 +117,7 @@ export function useHomeRows(): { rows: HomeRow[]; catsKnown: boolean } {
 
   const rows = useMemo(() => {
     const out: HomeRow[] = [];
-    if (resume.length) out.push({ key: 'continue', title: 'Continue watching', resume: true, entries: resume, loading: false });
+    if (resume.length) out.push({ key: 'recent', title: 'Recently watched', resume: true, entries: resume, loading: false });
     if (myList.length) out.push({ key: 'mylist', title: 'My List', entries: myList, loading: false });
     const both = !!movieCats?.length && !!seriesCats?.length;
     let count = 0;

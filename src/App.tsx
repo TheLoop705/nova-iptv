@@ -100,11 +100,14 @@ function Root() {
     return () => sub.remove();
   }, []);
 
-  // (Re)load the library whenever the active playlist changes
+  // (Re)load the library whenever the active playlist changes. Live TV channels wait until Live TV is opened,
+  // unless the last channel should start right away.
   useEffect(() => {
     if (!hydrated) return;
-    if (active) void useLibrary.getState().load(active);
-    else useLibrary.getState().reset();
+    if (!active) return useLibrary.getState().reset();
+    void useLibrary.getState().load(active);
+    const st = useSettings.getState();
+    if (st.prefs.startWithLastChannel && st.lastChannel[active.id]) useLibrary.getState().wantChannels();
   }, [hydrated, active?.id]);
 
   // Phones: fullscreen video goes landscape, the guide follows the device again afterwards

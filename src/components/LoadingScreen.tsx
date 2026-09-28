@@ -45,7 +45,7 @@ export function LoadingScreen({ message }: { message?: string }) {
         <View style={{ width: trackW, height: k(4), borderRadius: radius.pill, backgroundColor: colors.surface3, overflow: 'hidden', marginTop: k(16) }}>
           <Animated.View style={{ width: segW, height: '100%', borderRadius: radius.pill, backgroundColor: colors.accent, transform: [{ translateX: x }] }} />
         </View>
-        <Text style={[type('caption'), { color: colors.textDim, marginTop: k(10), fontVariant: ['tabular-nums'] }]}>{message ?? libMessage ?? 'Loading…'}</Text>
+        <Text style={[type('caption'), { color: colors.textDim, marginTop: k(10), fontVariant: ['tabular-nums'] }]}>{libMessage ?? message ?? 'Loading…'}</Text>
         {slow ? (
           <Text style={[type('caption'), { color: colors.muted, marginTop: k(18), textAlign: 'center', maxWidth: k(380) }]}>
             Big playlists take a while the first time. Nova keeps a copy, so the next start is quick.
