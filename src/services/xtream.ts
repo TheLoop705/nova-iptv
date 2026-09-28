@@ -41,11 +41,14 @@ const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : v && typeo
 /** List entries that carry `key` (a panel refusing a request answers with an account object instead of a list). */
 const rows = (v: unknown, key: string): any[] => arr<any>(v).filter((x) => x && typeof x === 'object' && x[key] != null);
 
+/** The panel answered and refused the account (wrong login, expired or disabled), as opposed to a network error. */
+export class AuthError extends Error {}
+
 export async function xtreamLogin(p: Playlist): Promise<XtreamAccount> {
   const data = await fetchJson<any>(api(p), { ua: p.userAgent, timeoutMs: 20000 });
   const ui = data?.user_info;
-  if (!ui || String(ui.auth) === '0') throw new Error('Login failed — check server, username and password.');
-  if (ui.status && ui.status !== 'Active') throw new Error(`Account status: ${ui.status}`);
+  if (!ui || String(ui.auth) === '0') throw new AuthError('Login failed — check server, username and password.');
+  if (ui.status && ui.status !== 'Active') throw new AuthError(`Account status: ${ui.status}`);
   return {
     status: ui.status,
     expDate: ui.exp_date ? Number(ui.exp_date) * 1000 : undefined,

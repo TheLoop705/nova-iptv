@@ -21,14 +21,14 @@ type Zone = 'rows' | 'hero';
 
 /**
  * Home, the start page, in the style of Netflix: movies and series only (live channels live in the guide).
- * TV and desktop: a billboard showing the focused title above rows of posters — Continue watching, My List,
+ * TV and desktop: a billboard showing the focused title above rows of posters — Recently watched, My List,
  * then categories. Phones: a featured title card, then the same rows.
  */
 export function HomeScreen() {
   const { s, mode, width, height } = useLayout();
   const tv = mode === 'tv';
   const { rows, catsKnown } = useHomeRows();
-  const status = useLibrary((st) => st.status);
+  const catalogStatus = useLibrary((st) => st.catalogStatus);
   const pid = useLibrary((st) => st.playlistId);
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
@@ -299,7 +299,7 @@ export function HomeScreen() {
 
   // ---- states before there's anything to show ----
   if (!rows.length) {
-    if (!catsKnown || status === 'loading' || status === 'idle') return <LoadingScreen message="Loading movies and series…" />;
+    if (!catsKnown || catalogStatus === 'loading' || catalogStatus === 'idle') return <LoadingScreen message="Loading movies and series…" />;
     return <EmptyHome enabled={!menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen} />;
   }
 

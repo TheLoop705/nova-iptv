@@ -48,6 +48,7 @@ export function SettingsScreen() {
   const epgFetchedAt = useLibrary((st) => st.epgFetchedAt);
   const epgStatus = useLibrary((st) => st.epgStatus);
   const channelsCount = useLibrary((st) => st.channels.length);
+  const channelStatus = useLibrary((st) => st.status);
   const updateStatus = useUpdater((st) => st.status);
   const update = useUpdater((st) => st.update);
   const updateProgress = useUpdater((st) => st.progress);
@@ -125,7 +126,7 @@ export function SettingsScreen() {
     const several = playlists.length > 1;
     openSheet({
       title: 'Clear watch history?',
-      subtitle: 'Continue watching, recently watched channels and movies, resume points and Watched marks are removed. Favorites and My List stay.',
+      subtitle: 'Recently watched movies, shows and channels, resume points and Watched marks are removed. Favorites and My List stay.',
       options: [
         {
           label: several ? `Clear for “${active.name}”` : 'Clear watch history',
@@ -193,8 +194,9 @@ export function SettingsScreen() {
       id: 'lib-live',
       label: 'Live TV',
       icon: 'television-classic',
-      value: n(channelsCount, 'channel', 'channels'),
-      detail: `${n(groupsCount, 'category', 'categories')} · ${n(guideCount, 'channel', 'channels')} with TV guide`,
+      // channels load when Live TV is opened
+      value: channelStatus === 'ready' ? n(channelsCount, 'channel', 'channels') : channelStatus === 'loading' ? 'Loading…' : 'Not loaded yet',
+      detail: channelStatus === 'ready' ? `${n(groupsCount, 'category', 'categories')} · ${n(guideCount, 'channel', 'channels')} with TV guide` : 'Channels load when you open Live TV',
       run: () => useUI.getState().setScreen('guide'),
     });
     r.push({
@@ -223,7 +225,7 @@ export function SettingsScreen() {
       label: 'Clear watch history',
       icon: 'delete-clock-outline',
       value: historyCount ? n(historyCount, 'item', 'items') : 'Empty',
-      detail: 'Continue watching, recently watched and resume points',
+      detail: 'Recently watched and resume points',
       run: clearHistorySheet,
     });
 
@@ -235,7 +237,10 @@ export function SettingsScreen() {
       icon: 'calendar-refresh',
       value: epgStatus === 'loading' ? 'Updating…' : epgFetchedAt ? `Updated ${formatDay(epgFetchedAt)} ${formatClock(epgFetchedAt, prefs.clock24)}` : undefined,
       run: () => {
-        void useLibrary.getState().refreshEpg(true);
+        // the guide is matched to the channels, so they come first if Live TV hasn't been opened yet
+        const lib = useLibrary.getState();
+        lib.wantChannels();
+        lib.wantEpg(true);
         showToast('Updating TV guide…');
       },
     });
@@ -335,7 +340,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
+  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, channelStatus, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;

@@ -220,18 +220,28 @@ function RailHint({ label, shortcut }: { label: string; shortcut?: string }) {
 }
 
 function Content({ screen }: { screen: Screen }) {
+  const pid = useLibrary((st) => st.playlistId);
   const status = useLibrary((st) => st.status);
+  const error = useLibrary((st) => st.error);
   const hasChannels = useLibrary((st) => st.channels.length > 0);
-  const xtream = useActivePlaylist()?.type === 'xtream';
-  // Xtream movies and series load on their own (and from their cache), so those screens don't wait for the
-  // channel list; they show their own loading state until their categories are in. A failed sign-in still
-  // shows the error, so an expired account never looks like a working library.
-  const vodScreen = xtream && (screen === 'home' || screen === 'movies' || screen === 'series');
-  if (vodScreen) {
-    if (status === 'error') return <LoadError />;
-  } else {
+  const catalogStatus = useLibrary((st) => st.catalogStatus);
+  const catalogError = useLibrary((st) => st.catalogError);
+  // Xtream: both category lists failed to load (and nothing was saved)
+  const noCatalog = useLibrary((st) => st.vodStatus.movieCats === 'error' && st.vodStatus.seriesCats === 'error');
+
+  // Live TV channels load when Live TV is opened; Search asks for them too, for its channel results
+  const wantsChannels = screen === 'guide' || screen === 'search';
+  useEffect(() => {
+    if (wantsChannels && status === 'idle') useLibrary.getState().wantChannels();
+  }, [wantsChannels, status, pid]);
+
+  // Home, Movies and Series need movies and series only (and a working sign-in, so an expired account
+  // never looks like a working library). They show their own loading state.
+  if (screen === 'home' || screen === 'movies' || screen === 'series') {
+    if (catalogStatus === 'error' || noCatalog) return <LoadError error={catalogError ?? "Couldn't load movies and series."} />;
+  } else if (screen === 'guide') {
     if (!hasChannels && (status === 'loading' || status === 'idle')) return <LoadingScreen />;
-    if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
+    if (!hasChannels && status === 'error') return <LoadError error={error} />;
   }
   switch (screen) {
     case 'home':
@@ -249,9 +259,8 @@ function Content({ screen }: { screen: Screen }) {
   }
 }
 
-function LoadError() {
+function LoadError({ error }: { error?: string }) {
   const { k, type } = useLayout();
-  const error = useLibrary((st) => st.error);
   const playlist = useActivePlaylist();
   const openEditor = useUI((st) => st.openEditor);
   const setScreen = useUI((st) => st.setScreen);

@@ -45,8 +45,8 @@ export function hasWatched(w: Watched): boolean {
 }
 
 /**
- * "Remove from history": forget having watched it, so it leaves Continue watching and the recently watched
- * lists, and its resume points and Watched marks go too (a series forgets every episode).
+ * "Remove from history": forget having watched it, so it leaves the recently watched lists (Home, Movies,
+ * Live TV), and its resume points and Watched marks go too (a series forgets every episode).
  */
 export async function removeFromHistory(w: Watched) {
   const pid = useLibrary.getState().playlistId;
