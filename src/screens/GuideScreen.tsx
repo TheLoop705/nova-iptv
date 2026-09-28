@@ -7,6 +7,7 @@ import { useLibrary, useAllGroups, ALL } from '../store/library';
 import { useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor } from '../store/ui';
+import { hasWatched, removeFromHistory } from '../store/actions';
 import { Layer, useKeyMode, useKeys, type KeyEvt } from '../input/keys';
 import { cellAt, nextProgram, programAt, type Cell } from '../services/epg';
 import { canCatchup } from '../services/catchup';
@@ -222,6 +223,9 @@ export function GuideScreen() {
           ...(p ? [{ label: 'Programme info', detail: p.title, icon: 'information-outline', onSelect: () => programSheet(ch, p) }] : []),
           ...(p && canCatchup(ch, p)
             ? [{ label: 'Watch from the start', detail: p.title, icon: 'history', onSelect: () => playCatchup(ch.id, p) }]
+            : []),
+          ...(hasWatched({ kind: 'live', channelId: ch.id })
+            ? [{ label: 'Remove from history', icon: 'delete-clock-outline', onSelect: () => void removeFromHistory({ kind: 'live', channelId: ch.id }) }]
             : []),
         ],
       });

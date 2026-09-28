@@ -11,6 +11,7 @@ import { PosterCard } from '../components/PosterCard';
 import { Focusable } from '../components/Focusable';
 import { Icon } from '../components/Icon';
 import { movieKey, playMovie } from '../services/vod';
+import { hasWatched, removeFromHistory, type Watched } from '../store/actions';
 import { formatDuration } from '../utils/format';
 
 type Item = VodItem | SeriesItem;
@@ -160,8 +161,10 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
       icon: isFav ? 'star-off-outline' : 'star-outline',
       onSelect: () => st.toggleVodFavorite(pid, kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem }),
     };
+    const watched: Watched = kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem };
+    const remove = hasWatched(watched) ? [{ label: 'Remove from history', icon: 'delete-clock-outline', onSelect: () => void removeFromHistory(watched) }] : [];
     if (kind === 'series') {
-      return useUI.getState().openSheet({ anchor, title: it.name, options: [{ label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => open(it) }, favOption] });
+      return useUI.getState().openSheet({ anchor, title: it.name, options: [{ label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => open(it) }, favOption, ...remove] });
     }
     const key = movieKey(it as VodItem);
     const pr = st.vodProgress[key];
@@ -177,6 +180,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
         pr?.done
           ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => st.setWatched(key, false) }
           : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) },
+        ...remove,
       ],
     });
   };

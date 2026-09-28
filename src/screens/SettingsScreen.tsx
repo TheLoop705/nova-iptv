@@ -38,6 +38,12 @@ export function SettingsScreen() {
   const setActive = useSettings((st) => st.setActive);
   const removePlaylist = useSettings((st) => st.removePlaylist);
   const hidden = useSettings((st) => (activeId ? st.hiddenGroups[activeId] : undefined));
+  // the active playlist falls back to the first one, as everywhere else
+  const historyCount = useSettings((st) => {
+    const id = (st.playlists.find((p) => p.id === st.activeId) ?? st.playlists[0])?.id;
+    return id ? (st.history[id]?.length ?? 0) : 0;
+  });
+  const clearWatchHistory = useSettings((st) => st.clearWatchHistory);
   const account = useLibrary((st) => st.account);
   const epgFetchedAt = useLibrary((st) => st.epgFetchedAt);
   const epgStatus = useLibrary((st) => st.epgStatus);
@@ -114,6 +120,40 @@ export function SettingsScreen() {
       ],
     });
 
+  const clearHistorySheet = () => {
+    if (!active) return;
+    const several = playlists.length > 1;
+    openSheet({
+      title: 'Clear watch history?',
+      subtitle: 'Continue watching, recently watched channels and movies, resume points and Watched marks are removed. Favorites and My List stay.',
+      options: [
+        {
+          label: several ? `Clear for “${active.name}”` : 'Clear watch history',
+          icon: 'delete-clock-outline',
+          destructive: true,
+          onSelect: () => {
+            clearWatchHistory(active.id);
+            showToast('Watch history cleared');
+          },
+        },
+        ...(several
+          ? [
+              {
+                label: 'Clear for all playlists',
+                icon: 'delete-sweep-outline',
+                destructive: true,
+                onSelect: () => {
+                  clearWatchHistory();
+                  showToast('Watch history cleared for all playlists');
+                },
+              },
+            ]
+          : []),
+        { label: 'Cancel', icon: 'close', onSelect: () => {} },
+      ],
+    });
+  };
+
   const pickNumber = (title: string, key: keyof Prefs, values: number[], unit: string) =>
     openSheet({
       title,
@@ -174,6 +214,17 @@ export function SettingsScreen() {
       value: counting ? 'Counting…' : n(seriesCount, 'series', 'series'),
       detail: seriesCats ? n(seriesCats, 'category', 'categories') : undefined,
       run: () => useUI.getState().setScreen('series'),
+    });
+
+    r.push({ kind: 'header', label: 'Watch history' });
+    r.push({
+      kind: 'item',
+      id: 'clear-history',
+      label: 'Clear watch history',
+      icon: 'delete-clock-outline',
+      value: historyCount ? n(historyCount, 'item', 'items') : 'Empty',
+      detail: 'Continue watching, recently watched and resume points',
+      run: clearHistorySheet,
     });
 
     r.push({ kind: 'header', label: 'TV Guide' });
@@ -284,7 +335,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
+  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;
