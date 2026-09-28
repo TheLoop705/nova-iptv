@@ -130,7 +130,9 @@ function Root() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <StatusBar style="light" hidden={mode === 'tv' || fullscreen} />
-      {!hydrated ? <BootScreen /> : hasPlaylists ? <Shell /> : <Onboarding />}
+      {/* Until settings are read: the web page's own splash covers the (empty) root; native shows the mark
+          in case the launch screen timed out */}
+      {!hydrated ? (Platform.OS === 'web' ? null : <BootScreen />) : hasPlaylists ? <Shell /> : <Onboarding />}
       <DetailHost />
       {editor ? <PlaylistEditor /> : null}
       <VideoLayer />
