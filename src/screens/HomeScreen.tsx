@@ -7,7 +7,7 @@ import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
 import { openSearch } from '../store/actions';
 import { Layer, useInputMode, useKeys } from '../input/keys';
-import { continueSeries, episodeKey, movieKey, playMovie, playSeries, resumeEpisode } from '../services/vod';
+import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
 import { formatDuration } from '../utils/format';
 import { Button } from '../components/Button';
 import { Icon } from '../components/Icon';
@@ -85,7 +85,7 @@ export function HomeScreen() {
   const play = useCallback((e: HomeEntry) => {
     if (e.type === 'more') return useUI.getState().openCategory(e.kind, e.categoryId);
     if (e.type === 'movie') return playMovie(e.item);
-    void (e.episode ? continueSeries(e.item, e.episode) : playSeries(e.item));
+    void continueSeries(e.item, e.episode);
   }, []);
 
   const open = useCallback(

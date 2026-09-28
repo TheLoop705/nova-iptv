@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
+import { useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI } from '../store/ui';
 import { useKeyMode, useKeys, type KeyEvt } from '../input/keys';
@@ -30,6 +31,8 @@ export function SearchScreen() {
   const channels = useLibrary((st) => st.channels);
   const movies = useLibrary((st) => st.movies);
   const series = useLibrary((st) => st.series);
+  const pid = useLibrary((st) => st.playlistId);
+  const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const epg = useLibrary((st) => st.epg);
   const vodAll = useLibrary((st) => st.vodStatus.all);
   const loadAllVod = useLibrary((st) => st.loadAllVod);
@@ -145,6 +148,9 @@ export function SearchScreen() {
         scored.push({ score, kind: 1, dup: `m:${title}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
       }
     }
+    // Series you've started say where you are; opening one lands on that episode
+    const lastEpisode = new Map<string, string>();
+    for (const h of history ?? []) if (h.kind === 'episode' && !lastEpisode.has(h.series.id)) lastEpisode.set(h.series.id, `Last watched S${h.episode.season} E${h.episode.episode}`);
     let sCount = 0;
     for (const list of Object.values(series)) {
       for (const sr of list as SeriesItem[]) {
@@ -154,7 +160,7 @@ export function SearchScreen() {
         if (!score) continue;
         seen.add(sr.id);
         sCount++;
-        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
+        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', lastEpisode.get(sr.id) ?? sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
       }
     }
     // Best matches first; channels before movies before series on ties
@@ -162,7 +168,7 @@ export function SearchScreen() {
     // One result per title (and year): the best-ranked copy wins
     const unique = new Set<string>();
     return scored.filter((x) => !unique.has(x.dup) && unique.add(x.dup)).map((x) => x.r);
-  }, [q, channels, movies, series, epg, playChannel, setDetail]);
+  }, [q, channels, movies, series, epg, history, playChannel, setDetail]);
 
   useEffect(() => setIdx(0), [q]);
   useEffect(() => {
