@@ -5,7 +5,7 @@ import { useLibrary } from '../store/library';
 import { useActivePlaylist, useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
-import { openSearch } from '../store/actions';
+import { hasWatched, openSearch, removeFromHistory, type Watched } from '../store/actions';
 import { Layer, useInputMode, useKeys } from '../input/keys';
 import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
 import { formatDuration } from '../utils/format';
@@ -112,7 +112,8 @@ export function HomeScreen() {
       const st = useSettings.getState();
       const inList = (st.vodFavorites[pid] ?? []).some((f) => f.item.id === e.item.id);
       const list: SheetOption = { label: inList ? 'Remove from My List' : 'Add to My List', icon: inList ? 'playlist-remove' : 'playlist-plus', onSelect: () => toggleList(e) };
-      const remove: SheetOption[] = e.historyId ? [{ label: 'Remove from Continue watching', icon: 'close-circle-outline', onSelect: () => st.removeHistory(pid, e.historyId!) }] : [];
+      const watched: Watched = e.type === 'movie' ? { kind: 'movie', item: e.item } : { kind: 'series', item: e.item };
+      const remove: SheetOption[] = e.historyId || hasWatched(watched) ? [{ label: 'Remove from history', icon: 'delete-clock-outline', onSelect: () => void removeFromHistory(watched) }] : [];
       if (e.type === 'movie') {
         const key = movieKey(e.item);
         const pr = st.vodProgress[key];

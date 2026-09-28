@@ -188,6 +188,12 @@ export function peekMovieInfo(item: VodItem): MovieInfo | null | undefined {
   return item.streamId ? movieInfoDone.get(movieInfoKey(item)) : null;
 }
 
+/** Watch-progress keys of every episode of a series (loads the episode list if it isn't known yet). */
+export async function seriesProgressKeys(series: SeriesItem): Promise<string[]> {
+  const info = seriesInfoCache.get(series.seriesId) ?? (await loadSeriesInfo(series).catch(() => null));
+  return (info?.seasons ?? []).flatMap((s) => s.episodes.map(episodeKey));
+}
+
 export async function loadSeriesInfo(item: SeriesItem): Promise<SeriesInfo | null> {
   const p = activePlaylist();
   if (!p) return null;
