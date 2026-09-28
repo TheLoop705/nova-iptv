@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,8 +15,9 @@ import { Poster } from '../components/Logo';
 import { Button } from '../components/Button';
 import { Icon } from '../components/Icon';
 import { Focusable } from '../components/Focusable';
+import { Badge } from '../components/Badge';
 import { imageUrl } from '../services/http';
-import { episodeKey, loadMovieInfo, loadSeriesInfo, movieKey, playEpisode, playMovie } from '../services/vod';
+import { episodeKey, loadMovieInfo, loadSeriesInfo, movieKey, playEpisode, playMovie, seriesResumePoint } from '../services/vod';
 import { formatDuration } from '../utils/format';
 
 /** Movie / series detail pages, shown over whichever screen opened them. */
@@ -163,13 +164,25 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [season, setSeason] = useState(0);
   const [ep, setEp] = useState(0);
-  const [zone, setZone] = useState<'fav' | 'seasons' | 'episodes'>('episodes');
+  const [zone, setZone] = useState<'header' | 'seasons' | 'episodes'>('episodes');
+  const [hb, setHb] = useState(0);
   const [isFav, toggleFav] = useFav('series', item);
+  const pid = useLibrary((st) => st.playlistId);
   const progress = useSettings((st) => st.vodProgress);
+  const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const setWatched = useSettings((st) => st.setWatched);
   const openSheet = useUI((st) => st.openSheet);
   const listRef = useRef<FlatList>(null);
+  const chipsRef = useRef<ScrollView>(null);
   const epH = tv ? s(62) : 76;
+
+  // Put the cursor on the episode to carry on with: the one you're in the middle of, or the next one
+  const goToResume = (i: SeriesInfo) => {
+    const at = seriesResumePoint(item, i);
+    setSeason(at?.season ?? 0);
+    setEp(at?.index ?? 0);
+    setZone(i.seasons.length ? 'episodes' : 'header');
+  };
 
   useEffect(() => {
     let alive = true;
@@ -177,16 +190,45 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       .then((i) => {
         if (!alive) return;
         setInfo(i);
-        if (!i?.seasons.length) setZone('fav');
+        if (i) goToResume(i);
+        else setZone('header');
       })
       .catch((e) => alive && setError(e?.message ?? 'Failed to load series'));
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
+
+  // Back from the player (which may have gone on to later episodes): follow along
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current && info) goToResume(info);
+    wasActive.current = active;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, info]);
 
   const seasons = info?.seasons ?? [];
   const episodes = seasons[season]?.episodes ?? [];
+  const resume = useMemo(() => (info ? seriesResumePoint(item, info) : undefined), [info, item, progress, history]);
+  const target = resume?.episode ?? seasons.find((x) => x.episodes.length)?.episodes[0];
+  const targetPr = target ? progress[episodeKey(target)] : undefined;
+  const headerButtons = [
+    ...(target
+      ? [
+          {
+            id: 'continue',
+            label: `${!resume ? 'Play' : targetPr && targetPr.pos > 0 ? 'Resume' : 'Continue'} S${target.season} E${target.episode}`,
+            icon: 'play',
+            primary: true,
+            run: () => playEpisode(item, target),
+          },
+        ]
+      : []),
+    { id: 'fav', label: isFav ? 'Favorited' : 'Favorite', icon: isFav ? 'star' : 'star-outline', primary: false, run: toggleFav },
+  ];
+  // Entering a season lands on its resume episode, if it has it
+  const firstIn = (si: number) => (resume && resume.season === si ? resume.index : 0);
 
   const episodeSheet = (e: Episode, anchor?: MenuAnchor) => {
     const pr = progress[episodeKey(e)];
@@ -207,31 +249,43 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
 
   useEffect(() => {
     listRef.current?.scrollToOffset({ offset: Math.max(0, (ep - 2) * epH), animated: true });
-  }, [ep, epH]);
+  }, [ep, season, epH]);
+
+  // Phones: bring the selected season's chip into view
+  const chipX = useRef<number[]>([]);
+  const scrollChips = (i: number) => chipsRef.current?.scrollTo({ x: Math.max(0, (chipX.current[i] ?? 0) - 16), animated: true });
+  useEffect(() => {
+    if (!tv) scrollChips(season);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [season, tv]);
+
+  const toHeader = () => {
+    setHb(0);
+    setZone('header');
+  };
 
   useKeys(
     (e) => {
       if (e.key === 'back') return close();
-      if (zone === 'fav') {
-        if (e.key === 'select') {
-          toggleFav();
-          return;
-        }
-        if (e.key === 'down' && seasons.length) return setZone(tv ? 'seasons' : 'episodes');
+      if (zone === 'header') {
+        if (e.key === 'left') return setHb((b) => Math.max(0, b - 1));
+        if (e.key === 'right') return setHb((b) => Math.min(headerButtons.length - 1, b + 1));
+        if (e.key === 'select') return headerButtons[hb]?.run();
+        if (e.key === 'down' && seasons.length) return setZone('episodes');
         return;
       }
       if (zone === 'seasons') {
-        if (e.key === 'up') return season > 0 ? setSeason(season - 1) : setZone('fav');
+        if (e.key === 'up') return season > 0 ? setSeason(season - 1) : toHeader();
         if (e.key === 'down') return setSeason(Math.min(seasons.length - 1, season + 1));
         if (e.key === 'right' || e.key === 'select') {
-          setEp(0);
+          setEp(firstIn(season));
           return setZone('episodes');
         }
         if (e.key === 'left') return;
         return;
       }
       // episodes
-      if (e.key === 'up') return ep > 0 ? setEp(ep - 1) : setZone('fav');
+      if (e.key === 'up') return ep > 0 ? setEp(ep - 1) : toHeader();
       if (e.key === 'down') return setEp(Math.min(episodes.length - 1, ep + 1));
       if (e.key === 'left') return tv ? setZone('seasons') : undefined;
       if (e.key === 'select' && episodes[ep]) return e.long ? episodeSheet(episodes[ep]) : playEpisode(item, episodes[ep]);
@@ -256,8 +310,10 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
             {info?.plot || item.plot}
           </Text>
         ) : null}
-        <View style={{ flexDirection: 'row', marginTop: k(12) }}>
-          <Button label={isFav ? 'Favorited' : 'Favorite'} icon={isFav ? 'star' : 'star-outline'} small focused={zone === 'fav'} onPress={toggleFav} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(12) }}>
+          {headerButtons.map((b, i) => (
+            <Button key={b.id} label={b.label} icon={b.icon} primary={b.primary} small focused={zone === 'header' && i === hb} onPress={b.run} testID={`series-${b.id}`} />
+          ))}
         </View>
       </View>
     </View>
@@ -280,7 +336,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                   focused={zone === 'seasons' && i === season}
                   onPress={() => {
                     setSeason(i);
-                    setEp(0);
+                    setEp(firstIn(i));
                   }}
                   style={{ height: s(34), borderRadius: s(radius.sm), paddingHorizontal: s(10), justifyContent: 'center', marginBottom: s(2), backgroundColor: i === season ? colors.accentSoft : 'transparent' }}
                   focusStyle={{ backgroundColor: colors.focus }}
@@ -294,17 +350,24 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
               ))}
             </View>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }}>
+            <ScrollView ref={chipsRef} horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }}>
               {seasons.map((se, i) => (
-                <Chip
+                <View
                   key={se.season}
-                  label={se.name}
-                  selected={i === season}
-                  onPress={() => {
-                    setSeason(i);
-                    setEp(0);
+                  onLayout={(e) => {
+                    chipX.current[i] = e.nativeEvent.layout.x;
+                    if (i === season) scrollChips(i);
                   }}
-                />
+                >
+                  <Chip
+                    label={se.name}
+                    selected={i === season}
+                    onPress={() => {
+                      setSeason(i);
+                      setEp(firstIn(i));
+                    }}
+                  />
+                </View>
               ))}
             </ScrollView>
           )}
@@ -315,8 +378,11 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
             keyExtractor={(e) => e.id}
             contentContainerStyle={{ paddingHorizontal: tv ? s(10) : 16, paddingBottom: 30 }}
             getItemLayout={(_d, i) => ({ length: epH, offset: epH * i, index: i })}
+            // opens already scrolled to the preselected episode
+            initialScrollIndex={Math.max(0, Math.min(ep - 2, episodes.length - 1))}
             renderItem={({ item: e, index: i }) => {
               const pr = progress[episodeKey(e)];
+              const here = resume?.season === season && resume.index === i;
               return (
                 <Focusable
                   focused={zone === 'episodes' && i === ep}
@@ -326,16 +392,19 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                   }}
                   onLongPress={() => episodeSheet(e)}
                   onContextMenu={(anchor) => episodeSheet(e, anchor)}
-                  style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: colors.surface, marginBottom: tv ? s(6) : 8 }}
+                  style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: here ? colors.accentSoft : colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
                   {({ focused }) => (
                     <>
                       <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
                       <View style={{ flex: 1 }}>
-                        <Text numberOfLines={1} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>
-                          {e.title}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {here ? <Badge label={resume.next ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
+                          <Text numberOfLines={1} style={{ flexShrink: 1, color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>
+                            {e.title}
+                          </Text>
+                        </View>
                         {e.plot ? (
                           <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
                             {e.plot}

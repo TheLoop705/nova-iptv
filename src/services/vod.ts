@@ -101,12 +101,60 @@ export async function resumeEpisode(series: SeriesItem, ep: Episode, fromStart =
   playEpisode(series, ep, fromStart);
 }
 
-/** Home: pick a series up where you left it — resume the episode, or start the next one once it's watched. */
-export async function continueSeries(series: SeriesItem, ep: Episode) {
-  if (!seriesInfoCache.has(series.seriesId)) await loadSeriesInfo(series).catch(() => null);
-  const pr = useSettings.getState().vodProgress[episodeKey(ep)];
-  const next = pr?.done && !(pr.pos > 0) ? nextEpisode(series, ep) : undefined;
-  playEpisode(series, next ?? ep);
+export interface ResumePoint {
+  /** index into `SeriesInfo.seasons` */
+  season: number;
+  /** index into that season's episodes */
+  index: number;
+  episode: Episode;
+  /** the episode before it was watched to the end: this one is up next */
+  next: boolean;
+}
+
+/**
+ * Where to pick a series up: the episode watched most recently, or the one after it once that's finished
+ * (the last episode stays put). Reads each episode's watch progress, which outlives the 40-entry history,
+ * plus the history entry for episodes stopped too early to have progress. Undefined if nothing was watched.
+ */
+export function seriesResumePoint(series: SeriesItem, info: SeriesInfo): ResumePoint | undefined {
+  const pid = useLibrary.getState().playlistId;
+  const { vodProgress, history } = useSettings.getState();
+  const last = pid ? history[pid]?.find((h) => h.kind === 'episode' && h.series.id === series.id) : undefined;
+  const lastId = last?.kind === 'episode' ? last.episode.id : undefined;
+  const seasons = info.seasons;
+  let si = -1;
+  let ei = -1;
+  let latest = 0;
+  for (let s = 0; s < seasons.length; s++) {
+    for (let e = 0; e < seasons[s].episodes.length; e++) {
+      const ep = seasons[s].episodes[e];
+      const at = Math.max(vodProgress[episodeKey(ep)]?.at ?? 0, ep.id === lastId ? last!.at : 0);
+      if (at > latest) [latest, si, ei] = [at, s, e];
+    }
+  }
+  if (si < 0) return undefined;
+  const pr = vodProgress[episodeKey(seasons[si].episodes[ei])];
+  if (pr?.done && !(pr.pos > 0)) {
+    if (ei + 1 < seasons[si].episodes.length) return { season: si, index: ei + 1, episode: seasons[si].episodes[ei + 1], next: true };
+    const later = seasons.findIndex((s, i) => i > si && s.episodes.length > 0);
+    if (later >= 0) return { season: later, index: 0, episode: seasons[later].episodes[0], next: true };
+  }
+  return { season: si, index: ei, episode: seasons[si].episodes[ei], next: false };
+}
+
+/**
+ * Carry a series on where you left it (see seriesResumePoint), or start the first episode. `ep` is the
+ * episode Home's Continue watching remembers, used if the episode list can't be loaded.
+ */
+export async function continueSeries(series: SeriesItem, ep?: Episode) {
+  let info = seriesInfoCache.get(series.seriesId) ?? null;
+  if (!info) {
+    useUI.getState().showToast('Loading episodes…');
+    info = await loadSeriesInfo(series).catch(() => null);
+  }
+  const target = (info && seriesResumePoint(series, info)?.episode) ?? ep ?? info?.seasons.find((s) => s.episodes.length)?.episodes[0];
+  if (target) playEpisode(series, target);
+  else useUI.getState().setDetail({ kind: 'series', item: series });
 }
 
 /** Recently fetched movie details, so Home's billboard and the detail page don't ask twice. */
@@ -138,21 +186,6 @@ export function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
 /** Movie details that have already arrived (undefined when not fetched yet), without a request. */
 export function peekMovieInfo(item: VodItem): MovieInfo | null | undefined {
   return item.streamId ? movieInfoDone.get(movieInfoKey(item)) : null;
-}
-
-/** Home's Play on a series: carry on where you left it, else start the first episode. */
-export async function playSeries(series: SeriesItem) {
-  const pid = useLibrary.getState().playlistId;
-  const last = pid ? useSettings.getState().history[pid]?.find((h) => h.kind === 'episode' && h.series.id === series.id) : undefined;
-  if (last?.kind === 'episode') return continueSeries(last.series, last.episode);
-  let info = seriesInfoCache.get(series.seriesId) ?? null;
-  if (!info) {
-    useUI.getState().showToast('Loading episodes…');
-    info = await loadSeriesInfo(series).catch(() => null);
-  }
-  const first = info?.seasons.find((s) => s.episodes.length)?.episodes[0];
-  if (first) playEpisode(series, first);
-  else useUI.getState().setDetail({ kind: 'series', item: series });
 }
 
 export async function loadSeriesInfo(item: SeriesItem): Promise<SeriesInfo | null> {
