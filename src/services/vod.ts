@@ -51,6 +51,22 @@ export function nextEpisode(series: SeriesItem, ep: Episode): Episode | undefine
   return seasons.slice(si + 1).find((s) => s.episodes.length)?.episodes[0];
 }
 
+/** The episode before `ep`: previous in the season, else the last of the season before. */
+export function prevEpisode(series: SeriesItem, ep: Episode): Episode | undefined {
+  const info = seriesInfoCache.get(series.seriesId);
+  if (!info) return undefined;
+  const seasons = info.seasons;
+  const si = seasons.findIndex((s) => s.season === ep.season);
+  if (si < 0) return undefined;
+  const ei = seasons[si].episodes.findIndex((e) => e.id === ep.id);
+  if (ei > 0) return seasons[si].episodes[ei - 1];
+  const before = seasons
+    .slice(0, si)
+    .reverse()
+    .find((s) => s.episodes.length);
+  return before?.episodes[before.episodes.length - 1];
+}
+
 function episodeItem(series: SeriesItem, ep: Episode) {
   return {
     kind: 'vod' as const,
@@ -68,31 +84,39 @@ function recordEpisode(series: SeriesItem, ep: Episode) {
   if (pid) useSettings.getState().pushHistory(pid, { kind: 'episode', id: watchId.series(series.id), series, episode: ep, at: Date.now() });
 }
 
-export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
-  const progress = useSettings.getState().vodProgress[episodeKey(ep)];
+/** An episode with the ones either side of it, for Next / Previous episode in the player. */
+function linkedEpisode(series: SeriesItem, ep: Episode) {
   const after = nextEpisode(series, ep);
-  recordEpisode(series, ep);
-  usePlayer.getState().playVod(
-    { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined },
-    fromStart ? undefined : progress?.pos
-  );
+  const before = prevEpisode(series, ep);
+  return { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined, prev: before ? episodeItem(series, before) : undefined };
 }
 
-/** Play an "Up next" item, keeping the chain going to the episode after it. */
-export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>) {
+export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
+  const progress = useSettings.getState().vodProgress[episodeKey(ep)];
+  recordEpisode(series, ep);
+  usePlayer.getState().playVod(linkedEpisode(series, ep), fromStart ? undefined : progress?.pos);
+}
+
+/**
+ * Play the next or previous episode from the player, keeping the chain going both ways. The next one
+ * starts from the beginning; going back resumes where that episode was left.
+ */
+export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>, resume = false) {
+  const resumeAt = resume ? useSettings.getState().vodProgress[next.key] : undefined;
+  const at = resumeAt && !resumeAt.done && resumeAt.pos > 0 ? resumeAt.pos : undefined;
   for (const [seriesId, info] of seriesInfoCache) {
     for (const season of info.seasons) {
       const ep = season.episodes.find((e) => episodeKey(e) === next.key);
       if (!ep) continue;
       const known = useSettings.getState().history[useLibrary.getState().playlistId ?? '']?.find((h) => h.kind === 'episode' && h.series.seriesId === seriesId);
       const series = known?.kind === 'episode' ? known.series : ({ id: String(seriesId), seriesId, name: next.title, poster: next.poster } as SeriesItem);
-      const after = nextEpisode(series, ep);
+      const linked = linkedEpisode(series, ep);
       recordEpisode(series, ep);
-      usePlayer.getState().playVod({ ...next, next: after ? episodeItem(series, after) : undefined });
+      usePlayer.getState().playVod({ ...next, next: linked.next, prev: linked.prev }, at);
       return;
     }
   }
-  usePlayer.getState().playVod(next);
+  usePlayer.getState().playVod(next, at);
 }
 
 /** Resume an episode from Home: loads the season list first so "Up next" keeps working. */

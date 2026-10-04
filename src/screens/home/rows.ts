@@ -4,6 +4,8 @@ import { useLibrary } from '../../store/library';
 import { favCatKey, useSettings, type WatchEntry } from '../../store/settings';
 
 export type VodKind = 'movies' | 'series';
+/** Home's filter: everything, or movies or series only */
+export type HomeFilter = 'all' | VodKind;
 
 /** One card in a Home row. */
 export type HomeEntry =
@@ -21,6 +23,8 @@ export interface HomeRow {
   categoryId?: string;
   /** Recently watched: OK plays straight away (resuming) instead of opening the details */
   resume?: boolean;
+  /** landscape cards (Continue watching) instead of posters */
+  wide?: boolean;
   entries: HomeEntry[];
   /** a category whose titles haven't arrived yet */
   loading: boolean;
@@ -47,11 +51,11 @@ function categoryEntries(list: (VodItem | SeriesItem)[], kind: VodKind, cat: Cat
 }
 
 /**
- * Home's rows, Netflix style: Recently watched, My List, then categories — starred ones first, then the
+ * Home's rows, Netflix style: Continue watching, My List, then categories — starred ones first, then the
  * ones you've been watching from, then movies and series alternating in the provider's order.
  * Live TV stays in the guide.
  */
-export function useHomeRows(): { rows: HomeRow[]; catsKnown: boolean } {
+export function useHomeRows(filter: HomeFilter = 'all'): { rows: HomeRow[]; catsKnown: boolean } {
   const pid = useLibrary((st) => st.playlistId);
   const movieCats = useLibrary((st) => st.movieCats);
   const seriesCats = useLibrary((st) => st.seriesCats);
@@ -117,15 +121,19 @@ export function useHomeRows(): { rows: HomeRow[]; catsKnown: boolean } {
 
   const rows = useMemo(() => {
     const out: HomeRow[] = [];
-    if (resume.length) out.push({ key: 'recent', title: 'Recently watched', resume: true, entries: resume, loading: false });
-    if (myList.length) out.push({ key: 'mylist', title: 'My List', entries: myList, loading: false });
-    const both = !!movieCats?.length && !!seriesCats?.length;
+    const want = (e: HomeEntry) => filter === 'all' || (filter === 'movies' ? e.type === 'movie' : e.type === 'series');
+    const recent = filter === 'all' ? resume : resume.filter(want);
+    const list = filter === 'all' ? myList : myList.filter(want);
+    if (recent.length) out.push({ key: 'recent', title: 'Continue watching', resume: true, wide: true, entries: recent, loading: false });
+    if (list.length) out.push({ key: 'mylist', title: 'My List', entries: list, loading: false });
+    const both = filter === 'all' && !!movieCats?.length && !!seriesCats?.length;
     let count = 0;
     for (const { key, kind, cat } of order) {
       if (count >= CATEGORY_ROWS) break;
-      const list = (kind === 'movies' ? movies[cat.id] : series[cat.id]) as (VodItem | SeriesItem)[] | undefined;
+      if (filter !== 'all' && kind !== filter) continue;
+      const titles = (kind === 'movies' ? movies[cat.id] : series[cat.id]) as (VodItem | SeriesItem)[] | undefined;
       // categories that turn out empty, or fail to load, drop out and the next one moves up
-      if (list ? !list.length : vodStatus[key] === 'error') continue;
+      if (titles ? !titles.length : vodStatus[key] === 'error') continue;
       count++;
       out.push({
         key,
@@ -133,12 +141,12 @@ export function useHomeRows(): { rows: HomeRow[]; catsKnown: boolean } {
         kindLabel: both ? (kind === 'movies' ? 'Movies' : 'Series') : undefined,
         kind,
         categoryId: cat.id,
-        entries: list ? categoryEntries(list, kind, cat) : [],
-        loading: !list,
+        entries: titles ? categoryEntries(titles, kind, cat) : [],
+        loading: !titles,
       });
     }
     return out;
-  }, [resume, myList, order, movies, series, vodStatus, movieCats, seriesCats]);
+  }, [resume, myList, order, movies, series, vodStatus, movieCats, seriesCats, filter]);
 
   return { rows, catsKnown: movieCats !== null && seriesCats !== null };
 }

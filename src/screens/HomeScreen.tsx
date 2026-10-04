@@ -1,33 +1,42 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { Animated, FlatList, Platform, Pressable, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Image } from 'expo-image';
 import { colors, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
 import { useActivePlaylist, useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
 import { hasWatched, openSearch, removeFromHistory, type Watched } from '../store/actions';
-import { Layer, useInputMode, useKeys } from '../input/keys';
-import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
+import { Layer, useInputMode, useKeyMode, useKeys } from '../input/keys';
+import { continueSeries, episodeKey, loadMovieInfo, movieKey, playMovie, resumeEpisode } from '../services/vod';
+import { imageUrl } from '../services/http';
 import { formatDuration } from '../utils/format';
 import { Button } from '../components/Button';
 import { Icon } from '../components/Icon';
 import { NovaMark } from '../components/NovaMark';
 import { LoadingScreen } from '../components/LoadingScreen';
-import { useHomeRows, type HomeEntry, type HomeRow } from './home/rows';
-import { Billboard, BillboardArt, FeaturedCard, useHero, type HeroAction } from './home/Billboard';
+import { useHomeRows, type HomeEntry, type HomeFilter, type HomeRow } from './home/rows';
+import { AmbientWash, Billboard, BillboardArt, FeaturedCard, FILTERS, TopBar, useHero, type HeroAction } from './home/Billboard';
 import { Rail, type RailMetrics } from './home/Rail';
 
-type Zone = 'rows' | 'hero';
+type Zone = 'tabs' | 'hero' | 'rows';
+
+/** Titles the spotlight takes turns with, and how long each one stays */
+const SPOTLIGHT_MAX = 6;
+const SPOTLIGHT_MS = 9000;
 
 /**
- * Home, the start page, in the style of Netflix: movies and series only (live channels live in the guide).
- * TV and desktop: a billboard showing the focused title above rows of posters — Recently watched, My List,
- * then categories. Phones: a featured title card, then the same rows.
+ * Home, the start page, in the style of the streaming apps: movies and series only (live channels live in
+ * the guide). TV and desktop: a full-width billboard — first a spotlight taking turns with a few titles,
+ * then, once the remote is in the rows, the focused title — above Continue watching, My List and the
+ * categories. Phones: a featured title card over its own colours, then the same rows.
  */
 export function HomeScreen() {
   const { s, mode, width, height } = useLayout();
   const tv = mode === 'tv';
-  const { rows, catsKnown } = useHomeRows();
+  const [filter, setFilter] = useState<HomeFilter>('all');
+  const { rows, catsKnown } = useHomeRows(tv ? filter : 'all');
+  const showFilter = useLibrary((st) => !!st.movieCats?.length && !!st.seriesCats?.length);
   const catalogStatus = useLibrary((st) => st.catalogStatus);
   const pid = useLibrary((st) => st.playlistId);
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
@@ -42,22 +51,24 @@ export function HomeScreen() {
   const [box, setBox] = useState({ w: width - (tv ? s(64) : 0), h: height });
   const m: RailMetrics = useMemo(() => {
     const k = tv ? s : (n: number) => n;
-    const posterW = tv ? s(80) : 108;
+    const posterW = tv ? s(84) : 112;
     const artH = (posterW - (tv ? s(5) : 4)) * 1.5 + (tv ? s(5) : 4);
-    // name + year under the poster
-    const captionH = tv ? s(6 + 15 + 14) : 6 + 17 + 16;
-    const titleH = k(tv ? 24 : 30);
-    const padY = k(tv ? 8 : 6);
-    return { tv, s, posterW, artH, gap: k(tv ? 12 : 10), padX: k(tv ? 28 : 16), padY, titleH, rowH: Math.round(titleH + padY * 2 + artH + captionH), viewW: box.w };
+    const gap = k(tv ? 12 : 10);
+    const wideW = posterW * 2 + gap;
+    const wideH = Math.round((wideW * 9) / 16);
+    const titleH = k(tv ? 26 : 30);
+    const padY = k(tv ? 9 : 8);
+    const row = (h: number) => Math.round(titleH + padY * 2 + h);
+    return { tv, s, posterW, artH, wideW, wideH, gap, padX: k(tv ? 28 : 16), padY, titleH, rowH: row(artH), wideRowH: row(wideH), viewW: box.w };
   }, [tv, s, box.w]);
-  // TV: the billboard takes what's left once a row and a bit of the next are showing
-  const heroH = Math.round(Math.max(s(200), Math.min(s(290), box.h - m.rowH * 1.3)));
+  const rowHeight = useCallback((r: HomeRow) => (r.wide ? m.wideRowH : m.rowH), [m]);
 
-  // ---- focus: a row (kept by key, so rows loading around it don't move it) and a card per row ----
-  const [zone, setZone] = useState<Zone>('rows');
+  // ---- focus: the spotlight, or a row (kept by key, so rows loading around it don't move it) and a card per row ----
+  const [zone, setZone] = useState<Zone>(tv ? 'hero' : 'rows');
   const [focusKey, setFocusKey] = useState<string>();
   const [cols, setCols] = useState<Record<string, number>>({});
   const [heroBtn, setHeroBtn] = useState(0);
+  const [tab, setTab] = useState(0);
   const [hover, setHover] = useState<{ row: string; col: number } | null>(null);
   const lastRow = useRef(0);
   let rowIdx = focusKey ? rows.findIndex((r) => r.key === focusKey) : -1;
@@ -68,6 +79,11 @@ export function HomeScreen() {
   const focused = row?.entries[col];
 
   // Desktop: the billboard follows the pointer until a key is pressed
+  const keyMode = useKeyMode();
+  // the rows have been scrolled down (by a mouse; the remote moves `zone` instead)
+  const [scrolled, setScrolled] = useState(false);
+  // TV and desktop: the spotlight is showing — at the top of Home, before the remote goes into the rows
+  const atTop = tv && (keyMode ? zone !== 'rows' : !scrolled);
   const hovered = hover ? rows.find((r) => r.key === hover.row)?.entries[hover.col] : undefined;
 
   // Phones: one featured title, from the first category (a different one each day)
@@ -78,7 +94,22 @@ export function HomeScreen() {
     return rows.find((r) => r.entries.length)?.entries.find((e) => e.type !== 'more');
   }, [rows, tv]);
 
-  const shown = tv ? (hovered ?? focused) : featured;
+  // TV and desktop: a few titles from the first categories take turns in the spotlight
+  const spotlight = useMemo(() => {
+    if (!tv) return [];
+    const cats = rows.filter((r) => r.categoryId).slice(0, 4);
+    const out: Extract<HomeEntry, { type: 'movie' | 'series' }>[] = [];
+    for (let i = 0; i < 3; i++)
+      for (const r of cats) {
+        const e = r.entries.filter((x) => x.type !== 'more' && x.item.poster)[i];
+        if (e && e.type !== 'more' && out.length < SPOTLIGHT_MAX && !out.some((o) => o.item.id === e.item.id)) out.push(e);
+      }
+    return out;
+  }, [rows, tv]);
+  const [slide, setSlide] = useState(() => Math.floor(Date.now() / 86400000));
+  const spot = spotlight.length ? spotlight[slide % spotlight.length] : undefined;
+
+  const shown = tv ? (hovered ?? (atTop || !keyMode ? (spot ?? focused) : focused)) : featured;
   const hero = useHero(shown);
 
   // ---- actions ----
@@ -176,6 +207,17 @@ export function HomeScreen() {
     return tv ? out : [out[2], out[0], { ...out[1], label: e.type === 'movie' ? 'Info' : 'Episodes' }];
   }, [shown, favs, history, shownProgress, play, toggleList, tv]);
 
+  // ---- filter: All / Movies / Series ----
+  const applyFilter = (f: HomeFilter) => {
+    if (f === filter) return;
+    setFilter(f);
+    setFocusKey(undefined);
+    setCols({});
+    setHover(null);
+    lastRow.current = 0;
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  };
+
   // ---- remote ----
   const focusRow = (i: number) => {
     const r = rows[Math.max(0, Math.min(rows.length - 1, i))];
@@ -187,6 +229,23 @@ export function HomeScreen() {
   useKeys(
     (e) => {
       if (hover) setHover(null);
+      if (zone === 'tabs') {
+        switch (e.key) {
+          case 'left':
+            return tab > 0 ? setTab(tab - 1) : false;
+          case 'right':
+            return setTab(Math.min(FILTERS.length - 1, tab + 1));
+          case 'select':
+            return applyFilter(FILTERS[tab].id);
+          case 'down':
+          case 'back':
+            return setZone('hero');
+          case 'up':
+            return;
+          default:
+            return false;
+        }
+      }
       if (zone === 'hero') {
         switch (e.key) {
           case 'left':
@@ -198,11 +257,17 @@ export function HomeScreen() {
           case 'select':
             return actions[heroBtn]?.run();
           case 'menu':
-            return openOptions(focused);
+            return openOptions(shown);
           case 'playpause':
-            return focused ? play(focused) : undefined;
+            return shown ? play(shown) : undefined;
+          case 'chup':
+            return setSlide((i) => i - 1 + spotlight.length);
+          case 'chdown':
+            return setSlide((i) => i + 1);
           case 'up':
-            return;
+            if (!showFilter) return;
+            setTab(FILTERS.findIndex((f) => f.id === filter));
+            return setZone('tabs');
           default:
             return false;
         }
@@ -232,10 +297,13 @@ export function HomeScreen() {
         case 'playpause':
           return focused ? play(focused) : undefined;
         case 'back':
-          // back to the top first, then to the menu
-          if (rowIdx === 0 && col === 0) return false;
+          // back to the top first (TV: the spotlight), then to the menu
+          if (!tv && rowIdx === 0 && col === 0) return false;
           setCol(row, 0);
-          return focusRow(0);
+          focusRow(0);
+          if (!tv) return;
+          setHeroBtn(0);
+          return setZone('hero');
         default:
           return false;
       }
@@ -244,12 +312,82 @@ export function HomeScreen() {
     Layer.screen
   );
 
+  // ---- the spotlight: the next title every few seconds while it's on screen and no card is pointed at ----
+  const spotlightOn = atTop && !hover && keysEnabled && spotlight.length > 1;
+  useEffect(() => {
+    if (!spotlightOn) return;
+    const t = setTimeout(() => setSlide((i) => i + 1), SPOTLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [spotlightOn, slide, heroBtn]);
+  // the next title's details and artwork, so it arrives complete
+  useEffect(() => {
+    if (!spotlightOn) return;
+    const next = spotlight[(slide + 1) % spotlight.length];
+    const prefetch = (uri?: string) => {
+      const url = uri && imageUrl(uri);
+      if (url) Image.prefetch(url).catch(() => {});
+    };
+    if (next.type === 'series') prefetch(next.item.backdrop);
+    else
+      loadMovieInfo(next.item).then(
+        (info) => prefetch(info?.backdrop),
+        () => {}
+      );
+  }, [spotlightOn, slide, spotlight]);
+
+  // ---- rows: where each one starts ----
+  const offsets = useMemo(() => {
+    const out = [0];
+    for (const r of rows) out.push(out[out.length - 1] + rowHeight(r));
+    return out;
+  }, [rows, rowHeight]);
+
+  // ---- the billboard: tall for the spotlight, shorter once in the rows; it always stays on screen ----
+  const compactH = Math.round(Math.max(s(200), Math.min(s(300), box.h - m.rowH * 1.25)));
+  // under the spotlight, the first row shows whole and the next one peeks out
+  const firstRow = rows[0] ? rowHeight(rows[0]) : m.rowH;
+  const expandedH = Math.round(Math.max(compactH, Math.min(box.h * 0.64, box.h - firstRow - m.titleH - m.padY - m.artH * 0.3)));
+  const expanded = atTop;
+  const heroH = expanded ? expandedH : compactH;
+  const heroAnim = useRef(new Animated.Value(heroH)).current;
+  const sized = useRef(false);
+  useEffect(() => {
+    // the first size is set, not animated
+    if (!sized.current) {
+      heroAnim.setValue(heroH);
+      sized.current = rows.length > 0;
+      return;
+    }
+    Animated.timing(heroAnim, { toValue: heroH, duration: 320, useNativeDriver: false }).start();
+  }, [heroH, heroAnim, rows.length]);
+  const artH = useMemo(() => Animated.add(heroAnim, s(56)), [heroAnim, s]);
+
   // ---- scrolling: the focused row sits right under the billboard ----
   const listRef = useRef<FlatList<HomeRow>>(null);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = e.nativeEvent.contentOffset.y;
+    setScrolled((was) => (was ? y > 0 : y > 12));
+  }, []);
+  // Web: the mouse wheel scrolls the rows wherever the pointer is, the billboard included
+  const rootRef = useRef<View>(null);
+  const ready = rows.length > 0;
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !tv || !ready) return;
+    const root = rootRef.current as unknown as HTMLElement | null;
+    if (!root?.addEventListener) return;
+    const onWheel = (e: WheelEvent) => {
+      const list = (listRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
+      if (!list || list.contains(e.target as Node) || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      list.scrollTop += e.deltaY;
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, [tv, ready]);
   const [headerH, setHeaderH] = useState(0);
   useEffect(() => {
-    if (tv) listRef.current?.scrollToOffset({ offset: zone === 'hero' ? 0 : rowIdx * m.rowH, animated: true });
-    else if (keysEnabled) listRef.current?.scrollToOffset({ offset: Math.max(0, headerH + rowIdx * m.rowH - 8), animated: true });
+    if (tv) listRef.current?.scrollToOffset({ offset: zone === 'rows' ? (offsets[rowIdx] ?? 0) : 0, animated: true });
+    else if (keysEnabled) listRef.current?.scrollToOffset({ offset: Math.max(0, headerH + (offsets[rowIdx] ?? 0) - 8), animated: true });
     // only when the remote moves, not when the pointer scrolls the list
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowIdx, zone, m.rowH, tv]);
@@ -261,9 +399,9 @@ export function HomeScreen() {
       const r = rows.find((x) => x.key === rk);
       const e = r?.entries[c];
       if (!r || !e) return;
+      // the zone stays, so the billboard doesn't resize under the pointer
       setFocusKey(rk);
       setCol(r, c);
-      setZone('rows');
       open(r, e);
     },
     menu: (rk, c, anchor) => openOptions(rows.find((x) => x.key === rk)?.entries[c], anchor),
@@ -286,6 +424,7 @@ export function HomeScreen() {
         categoryId={r.categoryId}
         entries={r.entries}
         loading={r.loading}
+        wide={r.wide}
         focusCol={zone === 'rows' && index === rowIdx ? col : -1}
         active={zone === 'rows' && index === rowIdx}
         m={m}
@@ -310,30 +449,42 @@ export function HomeScreen() {
       keyExtractor={(r) => r.key}
       renderItem={renderRow}
       extraData={renderRow}
-      getItemLayout={(_d, i) => ({ length: m.rowH, offset: (tv ? 0 : headerH) + m.rowH * i, index: i })}
+      getItemLayout={(d, i) => ({ length: d?.[i] ? rowHeight(d[i]) : m.rowH, offset: (tv ? 0 : headerH) + (offsets[i] ?? 0), index: i })}
       initialNumToRender={tv ? 3 : 4}
       maxToRenderPerBatch={3}
       windowSize={5}
       showsVerticalScrollIndicator={false}
+      onScroll={tv ? onScroll : undefined}
+      scrollEventThrottle={64}
       ListHeaderComponent={
         tv ? undefined : (
           <View onLayout={(e) => setHeaderH(e.nativeEvent.layout.height)} style={{ paddingBottom: 12 }}>
+            <AmbientWash uri={hero?.poster} height={headerH + 60} />
             <PhoneHeader />
             {hero ? <FeaturedCard hero={hero} actions={actions} /> : null}
           </View>
         )
       }
       // TV: room for the last row to come up under the billboard
-      contentContainerStyle={{ paddingBottom: tv ? Math.max(0, box.h - heroH - m.rowH) : 24 }}
+      contentContainerStyle={{ paddingBottom: tv ? Math.max(0, box.h - compactH - (rows.length ? rowHeight(rows[rows.length - 1]) : 0)) : 24 }}
     />
   );
 
   return (
-    <View style={{ flex: 1 }} onLayout={(e) => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
+    <View ref={rootRef} style={{ flex: 1 }} onLayout={(e) => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
       {tv ? (
         <>
-          <BillboardArt hero={hero} width={box.w} height={heroH + s(48)} />
-          <Billboard hero={hero} actions={actions} focusedAction={zone === 'hero' ? heroBtn : -1} height={heroH} width={box.w} />
+          <BillboardArt hero={hero} width={box.w} height={artH} heroH={heroH} />
+          <Billboard
+            hero={hero}
+            actions={actions}
+            focusedAction={zone === 'hero' ? heroBtn : -1}
+            height={heroAnim}
+            width={box.w}
+            expanded={expanded}
+            slides={atTop && !hover && spotlight.length > 1 ? { count: spotlight.length, index: slide % spotlight.length, onSelect: setSlide } : undefined}
+          />
+          {expanded ? <TopBar filter={filter} focusedTab={zone === 'tabs' ? tab : -1} showFilter={showFilter} onSelect={applyFilter} /> : null}
         </>
       ) : null}
       {list}

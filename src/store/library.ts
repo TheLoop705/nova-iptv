@@ -482,18 +482,29 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const p = current();
     if (!p || p.type !== 'xtream' || get().vodAllLoaded || get().vodStatus.all === 'loading') return;
     set({ vodStatus: { ...get().vodStatus, all: 'loading' } });
+    // Saved like the categories, so Search has everything at once instead of downloading the whole
+    // catalogue each time. The saved copy fills in categories not loaded yet; a fresh download wins.
+    const group = <T extends { categoryId: string }>(list: T[]) => {
+      const out: Record<string, T[]> = {};
+      for (const it of list) (out[it.categoryId] ??= []).push(it);
+      return out;
+    };
+    let movieApplies = 0;
+    let seriesApplies = 0;
     try {
-      const [movies, series] = await Promise.all([xtreamMovies(p).catch(() => []), xtreamSeries(p).catch(() => [])]);
-      const m: Record<string, VodItem[]> = {};
-      for (const it of movies) (m[it.categoryId] ??= []).push(it);
-      const sr: Record<string, SeriesItem[]> = {};
-      for (const it of series) (sr[it.categoryId] ??= []).push(it);
-      set((st) => ({
-        movies: { ...m, ...st.movies },
-        series: { ...sr, ...st.series },
-        vodAllLoaded: true,
-        vodStatus: { ...st.vodStatus, all: 'ready' },
-      }));
+      await Promise.all([
+        cachedVod(p.id, 'allMovies', () => xtreamMovies(p).catch(() => [] as VodItem[]), (list) => {
+          const m = group(list);
+          const fresh = movieApplies++ > 0;
+          set((st) => ({ movies: fresh ? { ...st.movies, ...m } : { ...m, ...st.movies }, vodAllLoaded: true }));
+        }),
+        cachedVod(p.id, 'allSeries', () => xtreamSeries(p).catch(() => [] as SeriesItem[]), (list) => {
+          const sr = group(list);
+          const fresh = seriesApplies++ > 0;
+          set((st) => ({ series: fresh ? { ...st.series, ...sr } : { ...sr, ...st.series }, vodAllLoaded: true }));
+        }),
+      ]);
+      if (get().playlistId === p.id) set((st) => ({ vodAllLoaded: true, vodStatus: { ...st.vodStatus, all: 'ready' } }));
     } catch {
       set((st) => ({ vodStatus: { ...st.vodStatus, all: 'error' } }));
     }
