@@ -19,8 +19,8 @@ const MAP: Record<string, KeyName> = {
   MediaPlayPause: 'playpause',
   MediaFastForward: 'ff',
   MediaRewind: 'rw',
-  MediaTrackNext: 'ff',
-  MediaTrackPrevious: 'rw',
+  MediaTrackNext: 'nexttrack',
+  MediaTrackPrevious: 'prevtrack',
   ' ': 'playpause',
   // YouTube-standard player shortcuts
   k: 'playpause',
@@ -32,6 +32,9 @@ const MAP: Record<string, KeyName> = {
   '>': 'faster',
   '<': 'slower',
   p: 'pip',
+  // Shift+N / Shift+P: next / previous episode
+  N: 'nexttrack',
+  P: 'prevtrack',
   o: 'menu',
   '/': 'search',
   BrowserSearch: 'search',

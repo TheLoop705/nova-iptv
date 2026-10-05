@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
@@ -10,7 +10,7 @@ import { Focusable } from '../components/Focusable';
 import { Logo, Poster } from '../components/Logo';
 import { Icon } from '../components/Icon';
 import { programAt } from '../services/epg';
-import { compactTitle, matchScore, queryWords } from '../services/searchMatch';
+import { compactTitles, matchScore, queryWords } from '../services/searchMatch';
 import { speechAvailable, startListening } from '../services/speech';
 import type { SeriesItem, VodItem } from '../types';
 import { RemoteKeys } from '../../modules/remote-keys';
@@ -21,19 +21,25 @@ interface Result {
   title: string;
   subtitle?: string;
   image?: string;
+  /** channels show what's on now, read by the row so guide data arriving doesn't redo the search */
+  channelId?: string;
   run: () => void;
 }
+
+/** Results per kind; the rest of a long list isn't worth scrolling through */
+const MAX_CHANNELS = 150;
+const MAX_VOD = 120;
 
 export function SearchScreen() {
   const { s, mode } = useLayout();
   const tv = mode === 'tv';
-  const k = tv ? s : (n: number) => n * 1.1;
+  // stable, so the memoized result rows only redraw when their own focus changes
+  const k = useMemo(() => (tv ? s : (n: number) => n * 1.1), [tv, s]);
   const channels = useLibrary((st) => st.channels);
   const movies = useLibrary((st) => st.movies);
   const series = useLibrary((st) => st.series);
   const pid = useLibrary((st) => st.playlistId);
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
-  const epg = useLibrary((st) => st.epg);
   const vodAll = useLibrary((st) => st.vodStatus.all);
   const loadAllVod = useLibrary((st) => st.loadAllVod);
   const menuFocused = useUI((st) => st.menuFocused);
@@ -54,11 +60,27 @@ export function SearchScreen() {
   const listRef = useRef<FlatList<Result>>(null);
   const rowH = tv ? s(50) : 64;
 
+  // The whole catalogue loads as soon as Search opens (from the saved copy when there is one), not
+  // once the first letters are typed
   useEffect(() => {
-    if (q.trim().length >= 2) void loadAllVod();
-  }, [q, loadAllVod]);
+    void loadAllVod();
+  }, [loadAllVod]);
   // channel results show what's on now
   useEffect(() => useLibrary.getState().wantEpg(), []);
+  // Prepare the titles for matching while nothing is typed yet, so the first letters don't wait for it
+  // (a few milliseconds at a time, so the field and the remote keep answering)
+  useEffect(() => {
+    const lists = [channels, ...Object.values(movies), ...Object.values(series)];
+    let i = 0;
+    let t: ReturnType<typeof setTimeout>;
+    const step = () => {
+      const until = Date.now() + 12;
+      while (i < lists.length && Date.now() < until) compactTitles(lists[i++]);
+      if (i < lists.length) t = setTimeout(step, 0);
+    };
+    t = setTimeout(step, 150);
+    return () => clearTimeout(t);
+  }, [channels, movies, series]);
 
   // Voice-search shortcut (hold Menu / Search key / "/") and remote users: open the keyboard right away.
   // On Fire TV the open keyboard is what lets the remote's mic button dictate into the field.
@@ -108,59 +130,56 @@ export function SearchScreen() {
     );
   };
 
+  // Typing stays quick: the results follow the field a moment later, and a newer letter cancels
+  // working out the results for the one before
+  const query = useDeferredValue(q.trim());
   const results = useMemo<Result[]>(() => {
-    const words = queryWords(q.trim());
-    if (q.trim().length < 2 || !words.length) return [];
-    const now = Date.now();
+    const words = queryWords(query);
+    if (query.length < 2 || !words.length) return [];
     // `dup`: providers list the same channel/movie in several categories under different IDs
     const scored: { r: Result; score: number; kind: number; dup: string }[] = [];
+    const chTitles = compactTitles(channels);
     let cCount = 0;
-    for (const c of channels) {
-      const title = compactTitle(c.name);
-      const score = matchScore(words, title);
+    for (let i = 0; i < channels.length && cCount < MAX_CHANNELS; i++) {
+      const score = matchScore(words, chTitles[i]);
       if (!score) continue;
-      const p = programAt(epg[c.id], now);
+      const c = channels[i];
+      cCount++;
       scored.push({
         score,
         kind: 0,
-        dup: 'c:' + title,
-        r: {
-          key: 'c' + c.id,
-          type: 'channel',
-          title: c.name,
-          subtitle: p ? `Now: ${p.title}` : c.group,
-          image: c.logo,
-          run: () => playChannel(c.id, { groupId: 'all', fullscreen: true }),
-        },
+        dup: 'c:' + chTitles[i],
+        r: { key: 'c' + c.id, type: 'channel', title: c.name, subtitle: c.group, image: c.logo, channelId: c.id, run: () => playChannel(c.id, { groupId: 'all', fullscreen: true }) },
       });
-      if (++cCount >= 150) break;
     }
     const seen = new Set<string>();
     let mCount = 0;
-    for (const list of Object.values(movies)) {
-      for (const m of list as VodItem[]) {
-        if (mCount >= 120 || seen.has(m.id)) continue;
-        const title = compactTitle(m.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
+    for (const list of Object.values(movies) as VodItem[][]) {
+      if (mCount >= MAX_VOD) break;
+      const titles = compactTitles(list);
+      for (let i = 0; i < list.length && mCount < MAX_VOD; i++) {
+        const score = matchScore(words, titles[i]);
+        const m = list[i];
+        if (!score || seen.has(m.id)) continue;
         seen.add(m.id);
         mCount++;
-        scored.push({ score, kind: 1, dup: `m:${title}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
+        scored.push({ score, kind: 1, dup: `m:${titles[i]}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
       }
     }
     // Series you've started say where you are; opening one lands on that episode
     const lastEpisode = new Map<string, string>();
     for (const h of history ?? []) if (h.kind === 'episode' && !lastEpisode.has(h.series.id)) lastEpisode.set(h.series.id, `Last watched S${h.episode.season} E${h.episode.episode}`);
     let sCount = 0;
-    for (const list of Object.values(series)) {
-      for (const sr of list as SeriesItem[]) {
-        if (sCount >= 120 || seen.has(sr.id)) continue;
-        const title = compactTitle(sr.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
+    for (const list of Object.values(series) as SeriesItem[][]) {
+      if (sCount >= MAX_VOD) break;
+      const titles = compactTitles(list);
+      for (let i = 0; i < list.length && sCount < MAX_VOD; i++) {
+        const score = matchScore(words, titles[i]);
+        const sr = list[i];
+        if (!score || seen.has(sr.id)) continue;
         seen.add(sr.id);
         sCount++;
-        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', lastEpisode.get(sr.id) ?? sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
+        scored.push({ score, kind: 2, dup: `s:${titles[i]}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', lastEpisode.get(sr.id) ?? sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
       }
     }
     // Best matches first; channels before movies before series on ties
@@ -168,9 +187,10 @@ export function SearchScreen() {
     // One result per title (and year): the best-ranked copy wins
     const unique = new Set<string>();
     return scored.filter((x) => !unique.has(x.dup) && unique.add(x.dup)).map((x) => x.r);
-  }, [q, channels, movies, series, epg, history, playChannel, setDetail]);
+  }, [query, channels, movies, series, history, playChannel, setDetail]);
+  const pending = query !== q.trim();
 
-  useEffect(() => setIdx(0), [q]);
+  useEffect(() => setIdx(0), [query]);
   useEffect(() => {
     if (zone === 'results') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 3) * rowH), animated: true });
   }, [idx, zone, rowH]);
@@ -200,6 +220,12 @@ export function SearchScreen() {
   };
   useKeys(onKey, !menuFocused && !detail);
 
+  const focusIdx = zone === 'results' ? idx : -1;
+  const renderItem = useCallback(
+    ({ item, index }: { item: Result; index: number }) => <ResultRow r={item} focused={index === focusIdx} rowH={rowH} k={k} />,
+    [focusIdx, rowH, k]
+  );
+
   return (
     <View style={{ flex: 1, padding: tv ? s(22) : 16 }}>
       <Text style={{ color: colors.text, fontSize: tv ? s(22) : 28, fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular, marginBottom: k(12) }}>Search</Text>
@@ -225,7 +251,7 @@ export function SearchScreen() {
           style={{ flex: 1, color: colors.text, fontSize: k(14), marginLeft: k(8), height: '100%', fontFamily: fonts.regular, outlineStyle: 'none' } as any}
           testID="search-input"
         />
-        {vodAll === 'loading' ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+        {vodAll === 'loading' || pending ? <ActivityIndicator size="small" color={colors.accent} /> : null}
         {canListen ? (
           <Pressable
             focusable={false}
@@ -241,8 +267,8 @@ export function SearchScreen() {
       {listening ? <Text style={{ color: colors.live, fontSize: k(12), marginTop: k(8), fontWeight: '600' }}>Listening… say a channel, movie or show</Text> : null}
       {voiceError ? <Text style={{ color: colors.star, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
 
-      {q.trim().length >= 2 && !results.length ? (
-        <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{q.trim()}”.</Text>
+      {query.length >= 2 && !pending && !results.length && vodAll !== 'loading' ? (
+        <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{query}”.</Text>
       ) : null}
       {q.trim().length < 2 && !listening ? <VoiceHint k={k} canListen={canListen} /> : null}
 
@@ -253,40 +279,61 @@ export function SearchScreen() {
         style={{ marginTop: k(12) }}
         keyboardShouldPersistTaps="handled"
         getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
-        renderItem={({ item: r, index }) => (
-          <Focusable
-            focused={zone === 'results' && index === idx}
-            onPress={r.run}
-            style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
-            focusStyle={{ backgroundColor: colors.focus }}
-          >
-            {({ focused }) => (
-              <>
-                {r.type === 'channel' ? (
-                  <Logo uri={r.image} name={r.title} size={k(26)} />
-                ) : (
-                  <View style={{ width: k(42), alignItems: 'center' }}>
-                    <Poster uri={r.image} name={r.title} width={k(28)} />
-                  </View>
-                )}
-                <View style={{ flex: 1, marginLeft: k(12) }}>
-                  <Text numberOfLines={1} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }}>
-                    {r.title}
-                  </Text>
-                  {r.subtitle ? (
-                    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
-                      {r.subtitle}
-                    </Text>
-                  ) : null}
-                </View>
-                <Icon name={r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={focused ? colors.focusText : colors.muted} />
-              </>
-            )}
-          </Focusable>
-        )}
+        renderItem={renderItem}
+        extraData={renderItem}
+        initialNumToRender={tv ? 10 : 12}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        removeClippedSubviews={Platform.OS === 'android'}
       />
     </View>
   );
+}
+
+/** One result. Memoized, so moving the focus redraws two rows instead of the whole list. */
+const ResultRow = memo(function ResultRow({ r, focused, rowH, k }: { r: Result; focused: boolean; rowH: number; k: (n: number) => number }) {
+  return (
+    <Focusable
+      focused={focused}
+      onPress={r.run}
+      style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
+      focusStyle={{ backgroundColor: colors.focus }}
+    >
+      {({ focused: f }) => (
+        <>
+          {r.type === 'channel' ? (
+            <Logo uri={r.image} name={r.title} size={k(26)} />
+          ) : (
+            <View style={{ width: k(42), alignItems: 'center' }}>
+              <Poster uri={r.image} name={r.title} width={k(28)} />
+            </View>
+          )}
+          <View style={{ flex: 1, marginLeft: k(12) }}>
+            <Text numberOfLines={1} style={{ color: f ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }}>
+              {r.title}
+            </Text>
+            {r.channelId ? <NowLine channelId={r.channelId} fallback={r.subtitle} focused={f} k={k} /> : r.subtitle ? <Subtitle text={r.subtitle} focused={f} k={k} /> : null}
+          </View>
+          <Icon name={r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={f ? colors.focusText : colors.muted} />
+        </>
+      )}
+    </Focusable>
+  );
+});
+
+function Subtitle({ text, focused, k }: { text: string; focused: boolean; k: (n: number) => number }) {
+  return (
+    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
+      {text}
+    </Text>
+  );
+}
+
+/** A channel result's "Now: …", once the guide has it (the group until then). */
+function NowLine({ channelId, fallback, focused, k }: { channelId: string; fallback?: string; focused: boolean; k: (n: number) => number }) {
+  const now = useLibrary((st) => programAt(st.epg[channelId], Date.now())?.title);
+  const text = now ? `Now: ${now}` : fallback;
+  return text ? <Subtitle text={text} focused={focused} k={k} /> : null;
 }
 
 /** How to search by voice on this device. */

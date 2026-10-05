@@ -65,6 +65,28 @@ export function normalizeName(s: string): string {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+/**
+ * A provider's title as a streaming app shows it: "DE - Omukade (2026)" → { title: "Omukade", year: "2026" }.
+ * Drops a leading language/quality tag ("DE - ", "|EN| ", "[4K] ", "NF: ") and a trailing year in brackets.
+ */
+export function cleanTitle(name: string): { title: string; year?: string } {
+  let t = name.trim();
+  for (let i = 0; i < 3; i++) {
+    const next = t.replace(/^(?:\[[^\]]{1,12}\]|\|[^|]{1,12}\||(?=[\d+]*\p{Lu})[\p{Lu}\d+]{2,5}\s*[-:|]|[\u{1F1E6}-\u{1F1FF}]{2})\s*/u, '');
+    if (next === t || !next) break;
+    t = next;
+  }
+  // trailing "(2002)", "(JP)", "[4K]" — the year is kept as the year
+  let year: string | undefined;
+  for (let i = 0; i < 3; i++) {
+    const m = /\s*[([](\d{4}|\p{Lu}[\p{Lu}\d]{1,3})[)\]]\s*$/u.exec(t);
+    if (!m || m.index === 0) break;
+    if (/^\d{4}$/.test(m[1])) year ??= m[1];
+    t = t.slice(0, m.index);
+  }
+  return { title: t.trim() || name.trim(), year };
+}
+
 export function initials(name: string): string {
   const words = name.replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return '?';

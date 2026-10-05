@@ -109,6 +109,8 @@ export function PlayerOverlay() {
     poke();
     setUpNext(null);
     setRow(live ? 'controls' : 'seek');
+    // the controls open on Play/Pause, not on Previous episode in front of it
+    setCtrl(item.kind === 'vod' && item.prev ? 1 : 0);
     return () => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
@@ -137,15 +139,25 @@ export function PlayerOverlay() {
     poke();
   };
 
-  // "Next episode" once the credits start (last 6 %, between 1 and 3 minutes)
+  // "Next episode" once the credits start: the last 2.5 %, between 20 and 45 seconds (it used to come up
+  // with minutes of the episode still to go)
   const nextItem = item.kind === 'vod' ? item.next : undefined;
-  const lead = duration > 0 ? Math.min(180, Math.max(60, duration * 0.06)) : 0;
+  const prevItem = item.kind === 'vod' ? item.prev : undefined;
+  const lead = duration > 0 ? Math.min(45, Math.max(20, duration * 0.025)) : 0;
   const nearEnd = !!nextItem && duration > 0 && position >= duration - lead && status !== 'ended' && !upNext;
   const playNext = () => {
     if (item.kind !== 'vod' || !item.next) return;
     saveVodProgress(item.key, duration, duration);
     setUpNext(null);
     playNextItem(item.next);
+  };
+  // The episode before: this one keeps its place, that one picks up where it was left
+  const playPrev = () => {
+    if (item.kind !== 'vod' || !item.prev) return;
+    const { position: p, duration: d } = posRef.current;
+    if (p > 0 && d > 0) saveVodProgress(item.key, p, d);
+    setUpNext(null);
+    playNextItem(item.prev, true);
   };
   // The button takes the remote's focus as soon as it appears (left/right still skip, Down goes back
   // to the timeline), and gives it back when it goes away
@@ -234,7 +246,9 @@ export function PlayerOverlay() {
       list.push({ id: 'fav', icon: isFav ? 'star' : 'star-outline', label: isFav ? 'Favorited' : 'Favorite', active: isFav });
       if (ch && program && canCatchup(ch, program, now)) list.push({ id: 'restart', icon: 'restart', label: 'Restart' });
     } else {
+      if (prevItem) list.push({ id: 'prevep', icon: 'skip-previous', label: 'Previous' });
       list.push({ id: 'playpause', icon: status === 'paused' ? 'play' : 'pause', label: status === 'paused' ? 'Play' : 'Pause' });
+      if (nextItem) list.push({ id: 'nextep', icon: 'skip-next', label: 'Next' });
       if (item.kind === 'catchup') list.push({ id: 'golive', icon: 'broadcast', label: 'Live' });
     }
     if (audioTracks.length > 1) list.push({ id: 'audio', icon: 'volume-high', label: 'Audio' });
@@ -249,7 +263,7 @@ export function PlayerOverlay() {
     if (caps.pip) list.push({ id: 'pip', icon: 'picture-in-picture-bottom-right', label: 'PiP' });
     if (caps.fullscreen) list.push({ id: 'fullscreen', icon: 'fullscreen', label: 'Fullscreen' });
     return list;
-  }, [live, isFav, ch, program, now, status, item.kind, audioTracks.length, subtitleTracks.length, fit, caps, rate, qualities, qualityIndex, autoQuality, muted]);
+  }, [live, isFav, ch, program, now, status, item.kind, prevItem, nextItem, audioTracks.length, subtitleTracks.length, fit, caps, rate, qualities, qualityIndex, autoQuality, muted]);
 
   useEffect(() => {
     if (ctrl >= controls.length) setCtrl(controls.length - 1);
@@ -344,6 +358,10 @@ export function PlayerOverlay() {
         return ch && playChannel(ch.id, { fullscreen: true });
       case 'playpause':
         return togglePlay();
+      case 'prevep':
+        return playPrev();
+      case 'nextep':
+        return playNext();
       case 'audio':
         return audioSheet();
       case 'subs':
@@ -388,6 +406,8 @@ export function PlayerOverlay() {
       if (e.key === 'back') return exit();
       if (live && (e.key === 'up' || e.key === 'chup')) return zap(-1);
       if (live && (e.key === 'down' || e.key === 'chdown')) return zap(1);
+      if (e.key === 'prevtrack') return live ? zap(-1) : playPrev();
+      if (e.key === 'nexttrack') return live ? zap(1) : playNext();
       return;
     }
     // standard player shortcuts (web keyboard / remotes with dedicated keys)
@@ -406,6 +426,14 @@ export function PlayerOverlay() {
     if (e.key === 'playpause') return togglePlay();
     if (e.key === 'info') return visible ? setVisible(false) : poke();
     if (e.key === 'back') return visible && status !== 'paused' ? setVisible(false) : exit();
+
+    if (e.key === 'prevtrack' || e.key === 'nexttrack') {
+      const back = e.key === 'prevtrack';
+      if (live) return zap(back ? -1 : 1);
+      if (back ? prevItem : nextItem) return back ? playPrev() : playNext();
+      // a movie: the track keys skip like ⏪ ⏩
+      return skip(back ? -10 : 10);
+    }
 
     if (live) {
       switch (e.key) {
@@ -466,6 +494,21 @@ export function PlayerOverlay() {
 
   useKeys(onKey, !sheetOpen, Layer.player);
 
+  // Clicked away, the controls stay away while the mouse moves; a click (or a key) brings them back.
+  // Hidden on their own after a while, moving the mouse brings them back as before.
+  const hiddenByClick = useRef(false);
+  useEffect(() => {
+    if (visible) hiddenByClick.current = false;
+  }, [visible]);
+  const toggleByTap = () => {
+    if (!visible) return poke();
+    hiddenByClick.current = true;
+    setVisible(false);
+  };
+  const onMouseMove = () => {
+    if (!hiddenByClick.current) poke();
+  };
+
   // ---- layout ----
   const title = item.kind === 'vod' ? item.title : program?.title || ch?.name || '';
   const subtitle = item.kind === 'vod' ? item.subtitle : ch ? `${ch.num}  ${ch.name}` : '';
@@ -474,8 +517,8 @@ export function PlayerOverlay() {
 
   return (
     <View style={StyleSheet.absoluteFill}>
-      <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={() => (visible ? setVisible(false) : poke())} />
-      <PlayerGestures controlsVisible={visible} seekable={!live} onTap={() => (visible ? setVisible(false) : poke())} onSwipeDown={exit} onActivity={poke} />
+      <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={toggleByTap} />
+      <PlayerGestures controlsVisible={visible} seekable={!live} onTap={toggleByTap} onSwipeDown={exit} onActivity={onMouseMove} />
 
       {status === 'loading' ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>

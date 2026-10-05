@@ -20,6 +20,7 @@ export const PosterCard = React.memo(function PosterCard({
   onPress,
   onMenu,
   onHoverIn,
+  bare,
 }: {
   item: VodItem | SeriesItem;
   width: number;
@@ -33,6 +34,8 @@ export const PosterCard = React.memo(function PosterCard({
   tv: boolean;
   s: (n: number) => number;
   onPress: () => void;
+  /** artwork only, no rating or name (Home's rows, where the billboard tells the rest) */
+  bare?: boolean;
 }) {
   const sub = caption ?? ('year' in item ? item.year : undefined);
   return (
@@ -51,7 +54,7 @@ export const PosterCard = React.memo(function PosterCard({
         <View>
           <View style={{ borderRadius: tv ? s(radius.md) : radius.md, borderWidth: tv ? s(2.5) : 2, borderColor: f ? colors.focus : hovered ? colors.borderStrong : 'transparent', overflow: 'hidden' }}>
             <Poster uri={item.poster} name={item.name} width={width - (tv ? s(5) : 4)} />
-            {item.rating && Number(item.rating) > 0 ? (
+            {!bare && item.rating && Number(item.rating) > 0 ? (
               <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: colors.videoScrim, borderRadius: radius.xs, paddingHorizontal: 5, paddingVertical: 1, flexDirection: 'row', alignItems: 'center' }}>
                 <Icon name="star" size={tv ? s(10) : 11} color={colors.star} />
                 <Text style={{ color: colors.onVideo, fontSize: tv ? s(10.5) : 11, fontWeight: '700', marginLeft: 2, fontVariant: ['tabular-nums'] }}>{Number(item.rating).toFixed(1)}</Text>
@@ -68,10 +71,12 @@ export const PosterCard = React.memo(function PosterCard({
               </View>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600', marginTop: tv ? s(6) : 6 }}>
-            {item.name}
-          </Text>
-          {sub ? (
+          {bare ? null : (
+            <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600', marginTop: tv ? s(6) : 6 }}>
+              {item.name}
+            </Text>
+          )}
+          {sub && !bare ? (
             <Text numberOfLines={1} style={{ color: colors.muted, fontSize: tv ? s(11) : 12 }}>
               {sub}
             </Text>

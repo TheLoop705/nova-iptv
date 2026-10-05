@@ -135,5 +135,7 @@ export type PlayItem =
       poster?: string;
       userAgent?: string;
       /** next episode of a series, offered by the "Up next" countdown */
-      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>;
+      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
+      /** the episode before, for the player's Previous episode */
+      prev?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
     };
