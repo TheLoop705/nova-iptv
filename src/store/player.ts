@@ -53,6 +53,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const prev = cur?.kind === 'live' && cur.channelId !== channelId ? cur.channelId : get().prevChannelId;
     const pid = useLibrary.getState().playlistId;
     if (pid) useSettings.getState().pushRecent(pid, channelId);
+    useLibrary.getState().wantEpg(); // now/next in the player
     if (cur?.kind !== 'live' || cur.channelId !== channelId) resetPlayback('loading');
     set({
       item: { kind: 'live', channelId },
@@ -64,6 +65,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   playCatchup: (channelId, program) => {
+    useLibrary.getState().wantEpg();
     resetPlayback('loading');
     set({ item: { kind: 'catchup', channelId, program }, fullscreen: true, resumeAt: undefined });
   },

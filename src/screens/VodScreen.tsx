@@ -7,10 +7,11 @@ import { useLibrary } from '../store/library';
 import { favCatKey, useSettings } from '../store/settings';
 import { useUI, type MenuAnchor } from '../store/ui';
 import { useKeys, type KeyEvt } from '../input/keys';
-import { Poster } from '../components/Logo';
+import { PosterCard } from '../components/PosterCard';
 import { Focusable } from '../components/Focusable';
 import { Icon } from '../components/Icon';
 import { movieKey, playMovie } from '../services/vod';
+import { hasWatched, removeFromHistory, type Watched } from '../store/actions';
 import { formatDuration } from '../utils/format';
 
 type Item = VodItem | SeriesItem;
@@ -57,10 +58,23 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
     ] as { id: string; name: string; favorite?: boolean }[];
   }, [kind, recent?.length, favItems.length, cats, favCats]);
 
+  // Home's "See all" opens a category with the grid focused
+  const browsed = useRef(useUI.getState().browse?.kind === kind ? useUI.getState().browse!.categoryId : undefined);
   const [catIndex, setCatIndex] = useState(0);
-  const [selected, setSelected] = useState<string | undefined>();
-  const [zone, setZone] = useState<'cats' | 'grid'>('cats');
+  const [selected, setSelected] = useState<string | undefined>(browsed.current);
+  const [zone, setZone] = useState<'cats' | 'grid'>(browsed.current ? 'grid' : 'cats');
   const [gi, setGi] = useState(0);
+
+  useEffect(() => {
+    if (useUI.getState().browse) useUI.setState({ browse: null });
+  }, []);
+  useEffect(() => {
+    if (!browsed.current) return;
+    const i = allCats.findIndex((c) => c.id === browsed.current);
+    if (i < 0) return;
+    browsed.current = undefined;
+    setCatIndex(i);
+  }, [allCats]);
 
   // default category: first real one
   useEffect(() => {
@@ -155,8 +169,10 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
       icon: isFav ? 'star-off-outline' : 'star-outline',
       onSelect: () => st.toggleVodFavorite(pid, kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem }),
     };
+    const watched: Watched = kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem };
+    const remove = hasWatched(watched) ? [{ label: 'Remove from history', icon: 'delete-clock-outline', onSelect: () => void removeFromHistory(watched) }] : [];
     if (kind === 'series') {
-      return useUI.getState().openSheet({ anchor, title: it.name, options: [{ label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => open(it) }, favOption] });
+      return useUI.getState().openSheet({ anchor, title: it.name, options: [{ label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => open(it) }, favOption, ...remove] });
     }
     const key = movieKey(it as VodItem);
     const pr = st.vodProgress[key];
@@ -172,6 +188,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
         pr?.done
           ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => st.setWatched(key, false) }
           : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) },
+        ...remove,
       ],
     });
   };
@@ -340,7 +357,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
               renderItem={({ item: it, index: idx }) => {
                 const prog = kind === 'movies' ? progress[movieKey(it as VodItem)] : undefined;
                 return <View style={{ height: rowH }}>
-                      <PosterCard
+                      <VodPosterCard
                         item={it}
                         index={idx}
                         testID={`vod-item-${kind}-${it.id}`}
@@ -363,19 +380,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   );
 }
 
-const PosterCard = React.memo(function PosterCard({
-  item,
-  index,
-  testID,
-  width,
-  focused,
-  progress,
-  watched,
-  tv,
-  s,
-  onOpen,
-  onMenu,
-}: {
+const VodPosterCard = React.memo(function VodPosterCard({ item, index, testID, width, focused, progress, watched, tv, s, onOpen, onMenu }: {
   item: Item;
   index: number;
   testID: string;
@@ -388,46 +393,10 @@ const PosterCard = React.memo(function PosterCard({
   s: (n: number) => number;
   onOpen: (item: Item, index: number) => void;
 }) {
-  const year = 'year' in item ? item.year : undefined;
   return (
-    <Focusable
-      focused={focused}
-      onPress={() => onOpen(item, index)}
-      onLongPress={onMenu && (() => onMenu(item, index))}
-      onContextMenu={onMenu && ((anchor) => onMenu(item, index, anchor))}
-      testID={testID}
-      accessibilityLabel={item.name}
-      style={{ width, borderRadius: radius.md, padding: 0 }}
-      hoverStyle={{ transform: [{ scale: 1.03 }] }}
-      focusStyle={{ transform: [{ scale: 1.07 }] }}
-    >
-      {({ focused: f, hovered }) => (
-        <View>
-          <View style={{ borderRadius: tv ? s(radius.md) : radius.md, borderWidth: tv ? s(2.5) : 2, borderColor: f ? colors.focus : hovered ? colors.borderStrong : 'transparent', overflow: 'hidden' }}>
-            <Poster uri={item.poster} name={item.name} width={width - (tv ? s(5) : 4)} />
-            {item.rating && Number(item.rating) > 0 ? (
-              <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: colors.videoScrim, borderRadius: radius.xs, paddingHorizontal: 5, paddingVertical: 1, flexDirection: 'row', alignItems: 'center' }}>
-                <Icon name="star" size={tv ? s(10) : 11} color={colors.star} />
-                <Text style={{ color: colors.onVideo, fontSize: tv ? s(10.5) : 11, fontWeight: '700', marginLeft: 2, fontVariant: ['tabular-nums'] }}>{Number(item.rating).toFixed(1)}</Text>
-              </View>
-            ) : null}
-            {watched && !(progress > 0) ? (
-              <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: colors.videoScrim, borderRadius: radius.pill, padding: 2 }}>
-                <Icon name="check-circle" size={tv ? s(13) : 15} color={colors.success} />
-              </View>
-            ) : null}
-            {progress > 0 ? (
-              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: tv ? s(3) : 4, backgroundColor: colors.videoScrim }}>
-                <View style={{ width: `${Math.min(100, progress * 100)}%`, height: '100%', backgroundColor: colors.accent }} />
-              </View>
-            ) : null}
-          </View>
-          <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600', marginTop: tv ? s(6) : 6 }}>
-            {item.name}
-          </Text>
-          {year ? <Text style={{ color: colors.muted, fontSize: tv ? s(11) : 12 }}>{year}</Text> : null}
-        </View>
-      )}
-    </Focusable>
+    <View testID={testID} style={{ width }}>
+      <PosterCard item={item} width={width} focused={focused} progress={progress} watched={watched} tv={tv} s={s}
+        onPress={() => onOpen(item, index)} onMenu={onMenu && ((anchor) => onMenu(item, index, anchor))} />
+    </View>
   );
 });

@@ -1,14 +1,16 @@
 import { create } from 'zustand';
+import { Platform } from 'react-native';
 import type { Category, Channel, Group, Playlist, Program, SeriesItem, VodItem } from '../types';
 import { parseM3UAsync } from '../services/m3u';
 import { fetchText, streamText } from '../services/http';
-import { getItem, removeItem } from '../services/storage';
+import { getItem, removeByPrefix, removeItem, setItem } from '../services/storage';
 import { readPlaylistCache, removePlaylistCache, writePlaylistCache, type PlaylistCache } from '../services/playlistCache';
 import { buildEpgIndexAsync } from '../services/epg';
 import { readEpgCache, removeEpgCache, writeEpgCache } from '../services/epgCache';
 import { createCheckpoint, throwIfAborted } from '../utils/cooperative';
 import { emptyEpg, mergeEpg, XmltvParser, type EpgData } from '../services/xmltv';
 import {
+  AuthError,
   xtreamEpgUrl,
   xtreamLive,
   xtreamLogin,
@@ -29,7 +31,8 @@ import {
 } from '../services/demo';
 import { normalizeName } from '../utils/format';
 import { groupCatalog } from '../services/catalog';
-import { playlistSource, samePlaylistSource } from '../services/playlistSource';
+import { playlistSource, samePlaylistSource, type PlaylistSource } from '../services/playlistSource';
+import { withCacheLock } from '../utils/cacheQueue';
 import { favCatKey, useSettings } from './settings';
 
 type Status = 'idle' | 'loading' | 'ready' | 'error';
@@ -39,6 +42,8 @@ interface LibraryState {
   status: Status;
   message?: string;
   error?: string;
+  catalogStatus: Status;
+  catalogError?: string;
   channels: Channel[];
   byId: Record<string, Channel>;
   groups: Group[];
@@ -64,6 +69,9 @@ interface LibraryState {
   seriesAllLoaded: boolean;
 
   load: (p: Playlist, opts?: { force?: boolean }) => Promise<void>;
+  wantChannels: () => void;
+  loadChannels: (opts?: { force?: boolean }) => Promise<void>;
+  wantEpg: (force?: boolean) => void;
   refreshEpg: (force?: boolean) => Promise<void>;
   loadMovieCats: () => Promise<void>;
   loadSeriesCats: () => Promise<void>;
@@ -82,6 +90,8 @@ const EMPTY = {
   status: 'idle' as Status,
   message: undefined,
   error: undefined,
+  catalogStatus: 'idle' as Status,
+  catalogError: undefined,
   channels: [] as Channel[],
   byId: {} as Record<string, Channel>,
   groups: [] as Group[],
@@ -123,20 +133,38 @@ async function buildGroups(channels: Channel[], signal?: AbortSignal): Promise<G
 
 const current = () => useSettings.getState().playlists.find((p) => p.id === useLibrary.getState().playlistId);
 
-async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void, signal?: AbortSignal): Promise<PlaylistCache> {
+function progressMsg(label: string, onMsg: (m: string) => void) {
+  let last = 0;
+  return (bytes: number) => {
+    if (Date.now() - last < 250) return;
+    last = Date.now();
+    onMsg(`${label} ${(bytes / 1048576).toFixed(1)} MB`);
+  };
+}
+
+async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void, signal?: AbortSignal, signedIn?: XtreamAccount): Promise<PlaylistCache> {
+  const generation = libraryGeneration;
+  if (playlistFetch?.generation === generation && !playlistFetch.signal?.aborted) return playlistFetch.promise;
+  const entry = { generation, signal, promise: fetchPlaylistData(p, onMsg, signal, signedIn) };
+  playlistFetch = entry;
+  void entry.promise.finally(() => { if (playlistFetch === entry) playlistFetch = undefined; }).catch(() => {});
+  return entry.promise;
+}
+
+async function fetchPlaylistData(p: Playlist, onMsg: (m: string) => void, signal?: AbortSignal, signedIn?: XtreamAccount): Promise<PlaylistCache> {
   throwIfAborted(signal);
   if (p.type === 'demo') {
     return { channels: demoChannels(), movies: [], epgUrls: [], fetchedAt: Date.now(), source: playlistSource(p) };
   }
   if (p.type === 'xtream') {
     onMsg('Signing in…');
-    const account = await xtreamLogin(p, signal);
+    const account = signedIn ?? await xtreamLogin(p, signal);
     onMsg('Loading channels…');
-    const channels = await xtreamLive(p, signal);
+    const channels = await xtreamLive(p, signal, progressMsg('Loading channels…', onMsg));
     return { channels, movies: [], epgUrls: [xtreamEpgUrl(p)], account, fetchedAt: Date.now(), source: playlistSource(p) };
   }
   onMsg('Downloading playlist…');
-  const text = p.inline ? ((await getItem<string>('m3u:' + p.id)) ?? '') : await fetchText(p.url!, { ua: p.userAgent, timeoutMs: 120000, signal });
+  const text = p.inline ? ((await getItem<string>('m3u:' + p.id)) ?? '') : await fetchText(p.url!, { ua: p.userAgent, timeoutMs: 120000, signal, onProgress: progressMsg('Downloading playlist…', onMsg) });
   throwIfAborted(signal);
   if (!/#EXTM3U|#EXTINF/.test(text.slice(0, 5000))) throw new Error('This does not look like an M3U playlist.');
   onMsg('Reading channels…');
@@ -145,6 +173,13 @@ async function fetchPlaylist(p: Playlist, onMsg: (m: string) => void, signal?: A
 }
 
 const shortEpgTried = new Set<string>();
+let channelsWanted = false;
+let epgWanted = false;
+let epgStarted = false;
+let epgForce = false;
+let channelJob: { generation: number; controller: AbortController; promise: Promise<void> } | undefined;
+let sourceReadiness: { generation: number; promise: Promise<boolean> } | undefined;
+let playlistFetch: { generation: number; signal?: AbortSignal; promise: Promise<PlaylistCache> } | undefined;
 let playlistController: AbortController | undefined;
 let stalePlaylistController: AbortController | undefined;
 let libraryGeneration = 0;
@@ -155,6 +190,8 @@ const shortEpgControllers = new Map<string, AbortController>();
 function cancelLibraryWork() {
   playlistController?.abort();
   stalePlaylistController?.abort();
+  channelJob?.controller.abort();
+  channelJob = undefined;
   epgJob?.controller.abort();
   epgJob = undefined;
   for (const controller of shortEpgControllers.values()) controller.abort();
@@ -163,6 +200,80 @@ function cancelLibraryWork() {
 }
 
 const catalogRequests = new Map<string, { generation: number; promise: Promise<void> }>();
+
+const PLAYLIST_TTL = 24 * 3600000;
+const VOD_TTL = 12 * 3600000;
+const vodPrefix = (id: string) => `vod:${id}:`;
+interface VodCache { source: PlaylistSource; at: number; token: string; pages: number }
+const vodPageKey = (key: string, cache: VodCache, page: number) => `${key}:${cache.token}:${page}`;
+
+/** Cache lists in bounded pages, so native JSON work never grows with a whole catalogue. */
+async function readVod<T>(p: Playlist, part: string, signal: AbortSignal): Promise<{ at: number; v: T[] } | null> {
+  return withCacheLock(vodPrefix(p.id), async () => {
+    const key = vodPrefix(p.id) + part;
+    const cache = await getItem<VodCache>(key);
+    throwIfAborted(signal);
+    if (!cache || !cache.source || !samePlaylistSource(cache.source, p) || !Number.isInteger(cache.pages)) return null;
+    const v: T[] = [];
+    const checkpoint = createCheckpoint(signal);
+    for (let page = 0; page < cache.pages; page++) {
+      const rows = await getItem<T[]>(vodPageKey(key, cache, page));
+      throwIfAborted(signal);
+      if (!Array.isArray(rows)) return null;
+      v.push(...rows);
+      const pause = checkpoint();
+      if (pause) await pause;
+    }
+    return { at: cache.at, v };
+  });
+}
+
+async function writeVod<T>(p: Playlist, part: string, list: T[], signal: AbortSignal) {
+  return withCacheLock(vodPrefix(p.id), async () => {
+    throwIfAborted(signal);
+    const key = vodPrefix(p.id) + part;
+    const old = await getItem<VodCache>(key);
+    const cache: VodCache = { source: playlistSource(p), at: Date.now(), token: Math.random().toString(36).slice(2), pages: 0 };
+    const checkpoint = createCheckpoint(signal);
+    try {
+      for (let start = 0; start < list.length; start += 128) {
+        throwIfAborted(signal);
+        await setItem(vodPageKey(key, cache, cache.pages), list.slice(start, start + 128));
+        cache.pages++;
+        const pause = checkpoint();
+        if (pause) await pause;
+      }
+      throwIfAborted(signal);
+      await setItem(key, cache);
+    } catch (error) {
+      for (let page = 0; page < cache.pages; page++) await removeItem(vodPageKey(key, cache, page));
+      throw error;
+    }
+    if (old?.token) for (let page = 0; page < old.pages; page++) {
+      await removeItem(vodPageKey(key, old, page));
+      const pause = checkpoint();
+      if (pause) await pause;
+    }
+  });
+}
+
+async function cachedVod<T>(p: Playlist, part: string, signal: AbortSignal, isCurrent: () => boolean,
+  fetch: () => Promise<T[]>, apply: (v: T[]) => Promise<void> | void, ttl = VOD_TTL) {
+  const saved = await readVod<T>(p, part, signal);
+  if (!isCurrent()) return;
+  if (saved) await apply(saved.v);
+  if (saved && Date.now() - saved.at < ttl) return;
+  try {
+    const list = await fetch();
+    if (!isCurrent()) return;
+    if (!list.length && saved?.v.length) return;
+    await apply(list);
+    if (isCurrent()) await writeVod(p, part, list, signal).catch(() => {});
+  } catch (error) {
+    throwIfAborted(signal);
+    if (!saved) throw error;
+  }
+}
 
 /** Share one request and cancel background catalog work on a library switch/reload. */
 function catalogRequest(key: string, work: (signal: AbortSignal, isCurrent: () => boolean) => Promise<void>): Promise<void> {
@@ -187,135 +298,165 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   reset: () => {
     libraryGeneration++;
     cancelLibraryWork();
+    epgWanted = epgStarted = epgForce = channelsWanted = false;
     set({ ...EMPTY });
   },
 
   load: async (p, opts = {}) => {
     const switching = get().playlistId !== p.id;
-    if (!switching && !opts.force && get().status === 'loading') return;
+    if (!switching && !opts.force && get().catalogStatus === 'loading') return;
     if (switching || opts.force) {
       libraryGeneration++;
       cancelLibraryWork();
+    }
+    if (switching) {
+      epgWanted = epgStarted = epgForce = channelsWanted = false;
+      set({ ...EMPTY, playlistId: p.id });
+    } else if (opts.force) {
+      epgStarted = false;
+      set({ movieCats: null, seriesCats: null, movies: {}, series: {}, vodStatus: {},
+        movieCount: undefined, seriesCount: undefined, moviesAllLoaded: false,
+        seriesAllLoaded: false, vodAllLoaded: false });
     }
     const generation = libraryGeneration;
     const controller = new AbortController();
     playlistController = controller;
     const signal = controller.signal;
     const isCurrent = () => !signal.aborted && libraryGeneration === generation && get().playlistId === p.id;
-    if (switching) {
-      shortEpgTried.clear();
-      set({ ...EMPTY, playlistId: p.id });
-    } else if (opts.force) {
-      // Cancelled jobs cannot publish into this generation. Clear their status
-      // and cached catalog so an explicit refresh can actually load it again.
-      set({ movieCats: null, seriesCats: null, movies: {}, series: {}, vodStatus: {},
-        movieCount: undefined, seriesCount: undefined, moviesAllLoaded: false,
-        seriesAllLoaded: false, vodAllLoaded: false });
-    }
-    set({ status: 'loading', error: undefined, message: 'Loading playlist…' });
+    let sourceChecked!: (ready: boolean) => void;
+    sourceReadiness = { generation, promise: new Promise((resolve) => { sourceChecked = resolve; }) };
+    set({ catalogStatus: 'loading', catalogError: undefined });
     try {
-      let data = opts.force ? null : await readPlaylistCache(p.id, signal, p);
-      if (!isCurrent()) return;
-      if (data && (!data.source || !samePlaylistSource(data.source, p))) {
-        // An inactive source can be edited from another device. Its same ID
-        // does not make this browser's channels or guide valid for the new login.
-        // Legacy caches without source identity receive one fresh download.
-        const clearing = get().clearCache(p.id);
-        const clearedGeneration = libraryGeneration;
-        try { await clearing; } catch (error: unknown) {
-          if (libraryGeneration === clearedGeneration) set({ playlistId: p.id, status: 'error',
-            error: error instanceof Error ? error.message : 'Could not clear the previous playlist cache.' });
-          return;
-        }
-        if (libraryGeneration !== clearedGeneration) return;
-        return get().load(p, { force: true });
-      }
-      const stale = !!data && Date.now() - data.fetchedAt > 24 * 3600000;
-      if (data && p.type === 'demo') data = null; // always regenerate demo
-      if (!data) {
-        data = await fetchPlaylist(p, (m) => { if (isCurrent()) set({ message: m }); }, signal);
+      // Check only the tiny identity record/manifest before reading any channel pages.
+      const source = await getItem<PlaylistSource>('library-source:' + p.id);
+      const legacy = source ? null : await getItem<{ source?: PlaylistSource }>('pl-parts:' + p.id)
+        ?? (Platform.OS === 'web' ? await getItem<{ source?: PlaylistSource }>('pl:' + p.id) : null);
+      throwIfAborted(signal);
+      const mismatch = source ? !samePlaylistSource(source, p) : !legacy?.source || !samePlaylistSource(legacy.source, p);
+      if (mismatch) set({ channels: [], byId: {}, groups: [], status: 'idle', account: undefined });
+      if (opts.force || mismatch) {
+        await Promise.all([
+          withCacheLock(vodPrefix(p.id), () => removeByPrefix(vodPrefix(p.id))),
+          removeItem('plvod:' + p.id),
+          ...(mismatch || !channelsWanted ? [removePlaylistCache(p.id)] : []),
+          ...(mismatch ? [removeEpgCache(p.id)] : []),
+        ]);
         if (!isCurrent()) return;
-        if (p.type !== 'demo') await writePlaylistCache(p.id, data, signal).catch(() => {});
+        if (mismatch) {
+          epgStarted = false;
+          epgForce = true;
+          set({ epg: {}, epgStatus: 'idle', epgFetchedAt: undefined, epgMessage: undefined, epgVersion: get().epgVersion + 1 });
+        }
+      }
+      await withCacheLock(vodPrefix(p.id), async () => {
+        throwIfAborted(signal);
+        await setItem('library-source:' + p.id, playlistSource(p));
+      });
+      if (!isCurrent()) return;
+      sourceChecked(true);
+      if (p.type === 'xtream') {
+        // Home needs categories, but Live and the potentially huge guide wait for first use.
+        void xtreamLogin(p, signal).then(
+          (account) => { if (isCurrent()) set({ account }); },
+          (error) => { if (isCurrent() && error instanceof AuthError) set({ catalogStatus: 'error', catalogError: error.message }); }
+        );
+        void get().loadMovieCats();
+        void get().loadSeriesCats();
+        set({ catalogStatus: 'ready' });
+      } else if (p.type === 'demo') {
+        await applyMovies(p, demoMovies(), signal, isCurrent);
+        if (isCurrent()) set({ catalogStatus: 'ready' });
+      } else {
+        await cachedVod<VodItem>(p, 'm3uMovies', signal, isCurrent, async () => {
+          const data = await fetchPlaylist(p, (m) => { if (isCurrent()) set({ message: m }); }, signal);
+          if (isCurrent()) await writePlaylistCache(p.id, data, signal).catch(() => {});
+          return data.movies;
+        }, (movies) => applyMovies(p, movies, signal, isCurrent), PLAYLIST_TTL);
+        if (isCurrent()) set({ catalogStatus: 'ready', message: undefined });
+      }
+      if (isCurrent() && channelsWanted) void get().loadChannels({ force: !!opts.force || mismatch });
+    } catch (error: any) {
+      if (isCurrent()) set({ catalogStatus: 'error', catalogError: error?.message ?? String(error), message: undefined });
+    } finally { sourceChecked(false); }
+  },
+
+  wantChannels: () => {
+    channelsWanted = true;
+    if (get().status === 'idle') void get().loadChannels();
+  },
+
+  loadChannels: (opts = {}) => {
+    const p = current();
+    if (!p) return Promise.resolve();
+    const generation = libraryGeneration;
+    if (channelJob?.generation === generation) return channelJob.promise;
+    if (!opts.force && get().status === 'ready') return Promise.resolve();
+    channelsWanted = true;
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const isCurrent = () => !signal.aborted && libraryGeneration === generation && get().playlistId === p.id;
+    const entry = { generation, controller, promise: Promise.resolve() };
+    entry.promise = Promise.resolve().then(run).catch((error: any) => {
+      if (isCurrent()) set({ status: 'error', error: error?.message ?? String(error), message: undefined });
+    }).finally(() => { if (channelJob === entry) channelJob = undefined; });
+    channelJob = entry;
+    return entry.promise;
+
+    async function run() {
+      set({ status: 'loading', error: undefined, message: 'Loading channels…' });
+      if (sourceReadiness?.generation === generation && !await sourceReadiness.promise) {
+        if (isCurrent()) set({ status: 'error', error: get().catalogError ?? 'Could not read the playlist source.', message: undefined });
+        return;
       }
       if (!isCurrent()) return;
-      await applyPlaylist(data);
+      let data = opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p);
+      if (!isCurrent()) return;
+      if (data && (!data.source || !samePlaylistSource(data.source, p!))) {
+        await Promise.all([removePlaylistCache(p!.id), removeEpgCache(p!.id)]);
+        if (!isCurrent()) return;
+        data = null;
+        epgForce = true;
+      }
+      const stale = !!data && Date.now() - data.fetchedAt > PLAYLIST_TTL;
+      if (!data) {
+        data = await fetchPlaylist(p!, (m) => { if (isCurrent()) set({ message: m }); }, signal, get().account);
+        if (!isCurrent()) return;
+        if (p!.type !== 'demo') await writePlaylistCache(p!.id, data, signal).catch(() => {});
+        if (p!.type === 'm3u') await writeVod(p!, 'm3uMovies', data.movies, signal).catch(() => {});
+      }
+      await applyChannels(data, signal, isCurrent);
       if (!isCurrent()) return;
       set({ status: 'ready', message: undefined });
-      void get().refreshEpg(!!opts.force);
-      // Background refresh of a stale cache
-      if (stale && !opts.force && p.type !== 'demo') {
+      if (epgWanted) {
+        const force = !!opts.force || epgForce;
+        epgForce = false;
+        void get().refreshEpg(force);
+      }
+      if (stale && !opts.force && p!.type !== 'demo') {
         stalePlaylistController = new AbortController();
         const staleSignal = stalePlaylistController.signal;
-        fetchPlaylist(p, () => {}, staleSignal)
-          .then(async (fresh) => {
-            if (!isCurrent()) return;
-            await writePlaylistCache(p.id, fresh, staleSignal).catch(() => {});
-            if (isCurrent()) await applyPlaylist(fresh);
-          })
-          .catch(() => {});
+        void fetchPlaylist(p!, () => {}, staleSignal, get().account).then(async (fresh) => {
+          if (!isCurrent() || staleSignal.aborted) return;
+          await writePlaylistCache(p!.id, fresh, staleSignal).catch(() => {});
+          if (!isCurrent() || staleSignal.aborted) return;
+          await applyChannels(fresh, staleSignal, isCurrent);
+          if (p!.type === 'm3u') {
+            await applyMovies(p!, fresh.movies, staleSignal, isCurrent);
+            await writeVod(p!, 'm3uMovies', fresh.movies, staleSignal).catch(() => {});
+          }
+        }).catch(() => {});
       }
-    } catch (e: any) {
-      if (!isCurrent()) return;
-      set({ status: 'error', error: e?.message ?? String(e), message: undefined });
-    }
-
-    async function applyPlaylist(data: PlaylistCache) {
-      const checkpoint = createCheckpoint(signal);
-      const byId: Record<string, Channel> = {};
-      for (const c of data.channels) {
-        byId[c.id] = c;
-        const pause = checkpoint();
-        if (pause) await pause;
-      }
-      const groups = await buildGroups(data.channels, signal);
-      const movieCategories = new Set<string>();
-      const movieIds = new Set<string>();
-      const seriesIds = new Set<string>();
-      for (const movie of data.movies) {
-        movieCategories.add(movie.categoryId);
-        const pause = checkpoint();
-        if (pause) await pause;
-      }
-      const movieCats =
-        p.type === 'demo'
-          ? demoMovieCats
-          : p.type === 'm3u'
-            ? [...movieCategories].map((c) => ({ id: c, name: c }))
-            : get().movieCats;
-      const movies: Record<string, VodItem[]> = p.type === 'xtream' ? get().movies : Object.create(null);
-      if (p.type === 'm3u') {
-        for (const m of data.movies) {
-          (movies[m.categoryId] ??= []).push(m);
-          movieIds.add(m.id);
-          const pause = checkpoint();
-          if (pause) await pause;
-        }
-      } else if (p.type === 'demo') {
-        for (const m of demoMovies()) { (movies[m.categoryId] ??= []).push(m); movieIds.add(m.id); }
-      }
-      const series: Record<string, SeriesItem[]> = p.type === 'xtream' ? get().series : Object.create(null);
-      if (p.type === 'demo') for (const s of demoSeries()) { (series[s.categoryId] ??= []).push(s); seriesIds.add(s.id); }
-      if (!isCurrent()) return;
-      set({
-        channels: data.channels,
-        byId,
-        groups,
-        epgUrls: data.epgUrls,
-        account: data.account,
-        fetchedAt: data.fetchedAt,
-        movieCats,
-        seriesCats: p.type === 'demo' ? demoSeriesCats : p.type === 'm3u' ? [] : get().seriesCats,
-        movies,
-        series,
-        movieCount: p.type === 'xtream' ? get().movieCount : movieIds.size,
-        seriesCount: p.type === 'xtream' ? get().seriesCount : seriesIds.size,
-        moviesAllLoaded: p.type !== 'xtream' || get().moviesAllLoaded,
-        seriesAllLoaded: p.type !== 'xtream' || get().seriesAllLoaded,
-        vodAllLoaded: p.type !== 'xtream' || get().vodAllLoaded,
-      });
     }
   },
 
+  wantEpg: (force = false) => {
+    epgWanted = true;
+    if (force) epgForce = true;
+    if (get().status !== 'ready' || (epgStarted && !epgForce)) return;
+    const refresh = epgForce;
+    epgForce = false;
+    void get().refreshEpg(refresh);
+  },
   refreshEpg: (force = false) => {
     const selected = current();
     if (!selected) return Promise.resolve();
@@ -323,6 +464,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const pid = p.id;
     const generation = libraryGeneration;
     if (epgJob?.generation === generation) return epgJob.promise;
+    epgStarted = true;
     if (force) {
       // An explicit refresh retries completed negative results once. Requests
       // already running still own their channel, so they cannot be duplicated.
@@ -467,10 +609,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     return catalogRequest('movieCats', async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, movieCats: 'loading' } }));
       try {
-        const cats = await xtreamVodCategories(p, signal);
-        if (isCurrent()) set((s) => ({ movieCats: cats, vodStatus: { ...s.vodStatus, movieCats: 'ready' } }));
-      } catch {
-        if (isCurrent()) set((s) => ({ vodStatus: { ...s.vodStatus, movieCats: 'error' } }));
+        await cachedVod<Category>(p, 'movieCats', signal, isCurrent, () => xtreamVodCategories(p, signal), (cats) => {
+          if (isCurrent()) set((s) => ({ movieCats: cats, vodStatus: { ...s.vodStatus, movieCats: 'ready' } }));
+        });
+      } catch (error: any) {
+        if (isCurrent()) set((s) => ({ catalogError: error?.message, vodStatus: { ...s.vodStatus, movieCats: 'error' } }));
       }
     });
   },
@@ -481,10 +624,11 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     return catalogRequest('seriesCats', async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, seriesCats: 'loading' } }));
       try {
-        const cats = await xtreamSeriesCategories(p, signal);
-        if (isCurrent()) set((s) => ({ seriesCats: cats, vodStatus: { ...s.vodStatus, seriesCats: 'ready' } }));
-      } catch {
-        if (isCurrent()) set((s) => ({ vodStatus: { ...s.vodStatus, seriesCats: 'error' } }));
+        await cachedVod<Category>(p, 'seriesCats', signal, isCurrent, () => xtreamSeriesCategories(p, signal), (cats) => {
+          if (isCurrent()) set((s) => ({ seriesCats: cats, vodStatus: { ...s.vodStatus, seriesCats: 'ready' } }));
+        });
+      } catch (error: any) {
+        if (isCurrent()) set((s) => ({ catalogError: error?.message, vodStatus: { ...s.vodStatus, seriesCats: 'error' } }));
       }
     });
   },
@@ -497,8 +641,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     return catalogRequest(key, async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'loading' } }));
       try {
-        const list = await xtreamMovies(p, categoryId, signal);
-        if (isCurrent()) set((s) => ({ movies: s.moviesAllLoaded ? s.movies : { ...s.movies, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+        await cachedVod<VodItem>(p, key, signal, isCurrent, () => xtreamMovies(p, categoryId, signal), (list) => {
+          if (isCurrent()) set((s) => ({ movies: s.moviesAllLoaded ? s.movies : { ...s.movies, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+        });
       } catch {
         if (isCurrent()) set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
       }
@@ -513,8 +658,9 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     return catalogRequest(key, async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'loading' } }));
       try {
-        const list = await xtreamSeries(p, categoryId, signal);
-        if (isCurrent()) set((s) => ({ series: s.seriesAllLoaded ? s.series : { ...s.series, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+        await cachedVod<SeriesItem>(p, key, signal, isCurrent, () => xtreamSeries(p, categoryId, signal), (list) => {
+          if (isCurrent()) set((s) => ({ series: s.seriesAllLoaded ? s.series : { ...s.series, [categoryId]: list }, vodStatus: { ...s.vodStatus, [key]: 'ready' } }));
+        });
       } catch {
         if (isCurrent()) set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'error' } }));
       }
@@ -530,16 +676,18 @@ export const useLibrary = create<LibraryState>((set, get) => ({
       // provider responses plus their normalized copies at once.
       if (!get().moviesAllLoaded) {
         try {
-          const data = await groupCatalog(await xtreamMovies(p, undefined, signal), signal);
-          if (!isCurrent()) return;
-          set({ movies: data.byCategory, movieCount: data.count, moviesAllLoaded: true });
+          await cachedVod<VodItem>(p, 'allMovies', signal, isCurrent, () => xtreamMovies(p, undefined, signal), async (list) => {
+            const data = await groupCatalog(list, signal);
+            if (isCurrent()) set({ movies: data.byCategory, movieCount: data.count, moviesAllLoaded: true });
+          });
         } catch { if (!isCurrent()) return; }
       }
       if (!get().seriesAllLoaded) {
         try {
-          const data = await groupCatalog(await xtreamSeries(p, undefined, signal), signal);
-          if (!isCurrent()) return;
-          set({ series: data.byCategory, seriesCount: data.count, seriesAllLoaded: true });
+          await cachedVod<SeriesItem>(p, 'allSeries', signal, isCurrent, () => xtreamSeries(p, undefined, signal), async (list) => {
+            const data = await groupCatalog(list, signal);
+            if (isCurrent()) set({ series: data.byCategory, seriesCount: data.count, seriesAllLoaded: true });
+          });
         } catch { if (!isCurrent()) return; }
       }
       if (!isCurrent()) return;
@@ -552,10 +700,38 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (get().playlistId === playlistId) get().reset();
     await Promise.all([
       removePlaylistCache(playlistId), removeEpgCache(playlistId),
+      withCacheLock(vodPrefix(playlistId), async () => {
+        await removeByPrefix(vodPrefix(playlistId));
+        await removeItem('library-source:' + playlistId);
+        await removeItem('plvod:' + playlistId);
+      }),
       ...(opts.removeSource ? [removeItem('m3u:' + playlistId)] : []),
     ]);
   },
 }));
+
+async function applyMovies(p: Playlist, list: VodItem[], signal: AbortSignal, isCurrent: () => boolean) {
+  const grouped = await groupCatalog(list, signal);
+  const series = await groupCatalog(p.type === 'demo' ? demoSeries() : [], signal);
+  if (!isCurrent()) return;
+  useLibrary.setState({ movieCats: p.type === 'demo' ? demoMovieCats : Object.keys(grouped.byCategory).map((id) => ({ id, name: id })),
+    seriesCats: p.type === 'demo' ? demoSeriesCats : [], movies: grouped.byCategory, series: series.byCategory,
+    movieCount: grouped.count, seriesCount: series.count, moviesAllLoaded: true, seriesAllLoaded: true, vodAllLoaded: true,
+    catalogStatus: 'ready' });
+}
+
+async function applyChannels(data: PlaylistCache, signal: AbortSignal, isCurrent: () => boolean) {
+  const byId: Record<string, Channel> = Object.create(null);
+  const checkpoint = createCheckpoint(signal);
+  for (const channel of data.channels) {
+    byId[channel.id] = channel;
+    const pause = checkpoint();
+    if (pause) await pause;
+  }
+  const groups = await buildGroups(data.channels, signal);
+  if (isCurrent()) useLibrary.setState((s) => ({ channels: data.channels, byId, groups, epgUrls: data.epgUrls,
+    account: s.account ?? data.account, fetchedAt: data.fetchedAt }));
+}
 
 // ---- derived groups, including virtual ones (Favorites / Recent / All) ----
 

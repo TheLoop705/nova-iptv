@@ -11,17 +11,18 @@ const info = { seasons: [{ season: 1, name: 'Season 1', episodes: [{ id: '1', se
 globalThis.__catalogSettings = { playlists: [], prefs: { epgRefreshHours: 12, epgPastDays: 1, epgFutureDays: 2 }, vodProgress: {}, history: {} };
 globalThis.__catalogApi = {};
 const storage = new Map();
-globalThis.__catalogStorage = { getItem: async (key) => storage.get(key) ?? null, setItem: async (key, value) => { storage.set(key, value); }, removeItem: async (key) => { storage.delete(key); } };
+globalThis.__catalogStorage = { getItem: async (key) => storage.get(key) ?? null, setItem: async (key, value) => { storage.set(key, value); }, removeItem: async (key) => { storage.delete(key); }, removeByPrefix: async (prefix) => { for (const key of storage.keys()) if (key.startsWith(prefix)) storage.delete(key); } };
 globalThis.__catalogPlayer = { playVod() {} };
 globalThis.__catalogHttp = { streamCalls: 0 };
 const apiNames = ['xtreamLogin', 'xtreamLive', 'xtreamEpgUrl', 'xtreamMovies', 'xtreamSeries', 'xtreamVodCategories', 'xtreamSeriesCategories', 'xtreamShortEpg', 'xtreamMovieInfo', 'xtreamSeriesInfo', 'xtreamMovieUrl', 'xtreamEpisodeUrl'];
 const mocks = {
   'react-native': 'export const Platform = { OS: "web" };',
-  'src/services/storage': 'export const getItem = (...a) => globalThis.__catalogStorage.getItem(...a); export const setItem = (...a) => globalThis.__catalogStorage.setItem(...a); export const removeItem = (...a) => globalThis.__catalogStorage.removeItem(...a);',
+  'src/services/storage': 'export const getItem = (...a) => globalThis.__catalogStorage.getItem(...a); export const setItem = (...a) => globalThis.__catalogStorage.setItem(...a); export const removeItem = (...a) => globalThis.__catalogStorage.removeItem(...a); export const removeByPrefix = (...a) => globalThis.__catalogStorage.removeByPrefix(...a);',
   'src/store/settings': 'export const useSettings = { getState: () => globalThis.__catalogSettings }; export const favCatKey = (...a) => a.join(":"); export const watchId = { series: id => id, movie: id => id };',
-  'src/services/xtream': apiNames.map((name) => `export const ${name} = (...a) => globalThis.__catalogApi.${name}(...a);`).join('\n'),
+  'src/services/xtream': 'export class AuthError extends Error {}\n' + apiNames.map((name) => `export const ${name} = (...a) => globalThis.__catalogApi.${name}(...a);`).join('\n'),
   'src/services/http': 'export const fetchText = async () => ""; export const streamText = async (_url, _opts, onText) => { globalThis.__catalogHttp.streamCalls++; await onText("<tv/>"); };',
   'src/store/player': 'export const usePlayer = { getState: () => globalThis.__catalogPlayer };',
+  'src/store/ui': 'export const useUI = { getState: () => ({ showToast() {}, setDetail() {} }) };',
 };
 const { useLibrary } = await appModule('src/store/library.ts', mocks);
 const vod = await appModule('src/services/vod.ts');
@@ -123,7 +124,7 @@ test('forced refresh clears cancelled loading flags and loaded totals', async ()
   assert.equal(useLibrary.getState().vodStatus.all, 'loading');
   await useLibrary.getState().load(p, { force: true });
   assert.equal(networkSignal.aborted, true);
-  assert.deepEqual(useLibrary.getState().vodStatus, {});
+  assert.equal(useLibrary.getState().vodStatus.all, undefined);
   assert.equal(useLibrary.getState().movieCount, undefined);
   finish([movie()]);
   await pending;
@@ -189,6 +190,7 @@ test('clearing derived caches preserves an imported playlist so it can be refres
   assert.equal(storage.has('pl-parts:file'), false);
   assert.equal(storage.has('epg-parts:file'), false);
   await useLibrary.getState().load(p, { force: true });
+  await useLibrary.getState().loadChannels();
   assert.equal(useLibrary.getState().status, 'ready');
   assert.equal(useLibrary.getState().channels[0].name, 'Imported channel');
   await useLibrary.getState().clearCache(p.id, { removeSource: true });
@@ -206,13 +208,15 @@ test('same-ID source invalidation cancels an old download before replacing its c
     }
     return Promise.resolve([{ ...channel, id: 'x2', name: 'New provider' }]);
   };
-  const oldLoad = useLibrary.getState().load(original, { force: true });
+  await useLibrary.getState().load(original, { force: true });
+  const oldLoad = useLibrary.getState().loadChannels({ force: true });
   await pause();
   const updated = { ...original, password: 'replacement' };
   globalThis.__catalogSettings.playlists = [updated];
   await useLibrary.getState().clearCache(updated.id);
   assert.equal(oldSignal.aborted, true);
   await useLibrary.getState().load(updated, { force: true });
+  await useLibrary.getState().loadChannels();
   finishOld([{ ...channel, name: 'Stale provider' }]);
   await oldLoad;
   assert.equal(calls, 2);
@@ -248,6 +252,7 @@ test('an inactive source edited on another device refreshes channels and rejects
     for (const rows of Object.values(state.epg)) for (const program of rows) published.push(program.title);
   });
   await useLibrary.getState().load(updated);
+  await useLibrary.getState().loadChannels();
   await useLibrary.getState().refreshEpg();
   unsubscribe();
   assert.equal(liveCalls, 1);
@@ -257,6 +262,7 @@ test('an inactive source edited on another device refreshes channels and rejects
   assert.deepEqual(storage.get('pl-parts:b').source, playlistSource(updated));
   useLibrary.getState().reset();
   await useLibrary.getState().load({ ...updated, name: 'Renamed remotely' });
+  await useLibrary.getState().loadChannels();
   await useLibrary.getState().refreshEpg();
   assert.equal(liveCalls, 1, 'display-only edits keep a matching channel cache');
   assert.equal(globalThis.__catalogHttp.streamCalls, 1, 'matching source keeps its completed guide cache');
@@ -268,11 +274,13 @@ test('legacy source-less caches refresh once and subsequently use the identified
   let calls = 0;
   globalThis.__catalogApi.xtreamLive = async () => { calls++; return [channel]; };
   await useLibrary.getState().load(p);
+  await useLibrary.getState().loadChannels();
   assert.equal(calls, 1);
   assert.equal(useLibrary.getState().channels[0].name, 'One');
   assert.deepEqual(storage.get('pl-parts:a').source, playlistSource(p));
   useLibrary.getState().reset();
   await useLibrary.getState().load(p);
+  await useLibrary.getState().loadChannels();
   assert.equal(calls, 1);
 });
 
@@ -283,13 +291,13 @@ test('failed invalidation leaves a retryable error instead of exposing a mismatc
   globalThis.__catalogStorage.removeItem = async () => { throw Error('Cache unavailable'); };
   try {
     await useLibrary.getState().load(p);
-    assert.equal(useLibrary.getState().status, 'error');
+    assert.equal(useLibrary.getState().catalogStatus, 'error');
     assert.equal(useLibrary.getState().playlistId, p.id);
-    assert.equal(useLibrary.getState().error, 'Cache unavailable');
+    assert.equal(useLibrary.getState().catalogError, 'Cache unavailable');
     assert.deepEqual(useLibrary.getState().channels, []);
   } finally { globalThis.__catalogStorage.removeItem = remove; }
   await useLibrary.getState().load(p);
-  assert.equal(useLibrary.getState().status, 'ready');
+  assert.equal(useLibrary.getState().catalogStatus, 'ready');
 });
 
 test('same-ID source edits resume Home and detail episodes with fresh metadata and current credentials', async () => {
@@ -343,4 +351,76 @@ test('removed episodes fall back to available metadata and an unavailable series
   await vod.continueSeries(series, saved);
   vod.playNextItem({ ...played[0].item, key: 'a:ep:removed', url: 'https://old.example/private/autoplay.mp4' });
   assert.equal(played.length, 1);
+});
+
+test('Home startup loads categories without live channels or guide; repeated Live visits share one download', async () => {
+  const p = seed();
+  useLibrary.getState().reset();
+  let calls = 0, release;
+  globalThis.__catalogApi.xtreamLive = () => { calls++; return new Promise((resolve) => { release = resolve; }); };
+  await useLibrary.getState().load(p);
+  await pause();
+  assert.equal(useLibrary.getState().catalogStatus, 'ready');
+  assert.equal(useLibrary.getState().status, 'idle');
+  assert.equal(calls, 0);
+  assert.equal(globalThis.__catalogHttp.streamCalls, 0);
+  useLibrary.getState().wantChannels();
+  useLibrary.getState().wantChannels();
+  useLibrary.getState().wantEpg();
+  await pause();
+  assert.equal(calls, 1);
+  release([channel]);
+  await useLibrary.getState().loadChannels();
+  assert.equal(useLibrary.getState().status, 'ready');
+  useLibrary.getState().wantChannels();
+  useLibrary.getState().wantEpg();
+  await pause();
+  assert.equal(calls, 1);
+});
+
+test('paged category cache survives restart and a same-ID provider edit cannot reuse its movies', async () => {
+  const p = seed();
+  let calls = 0;
+  globalThis.__catalogApi.xtreamMovies = async () => { calls++; return [movie()]; };
+  await useLibrary.getState().loadMovies('1');
+  useLibrary.getState().reset();
+  seed();
+  await useLibrary.getState().loadMovies('1');
+  assert.equal(calls, 1);
+  useLibrary.getState().reset();
+  seed();
+  globalThis.__catalogSettings.playlists = [{ ...p, password: 'new-account' }];
+  await useLibrary.getState().loadMovies('1');
+  assert.equal(calls, 2);
+});
+
+test('startup channel intent waits for source invalidation before publishing a cached old provider', async () => {
+  const p = seed();
+  await writePlaylistCache(p.id, { fetchedAt: Date.now(), channels: [{ ...channel, name: 'Old provider' }], movies: [], epgUrls: [], source: playlistSource(p) });
+  useLibrary.getState().reset();
+  const updated = { ...p, password: 'new-account' };
+  globalThis.__catalogSettings.playlists = [updated];
+  const published = [];
+  const unsubscribe = useLibrary.subscribe((state) => published.push(...state.channels.map((c) => c.name)));
+  const loading = useLibrary.getState().load(updated);
+  useLibrary.getState().wantChannels();
+  await loading;
+  await useLibrary.getState().loadChannels();
+  unsubscribe();
+  assert.equal(published.includes('Old provider'), false);
+  assert.equal(useLibrary.getState().channels[0].name, 'One');
+});
+
+test('previous episode playback retains both links and resumes progress using current metadata', async () => {
+  seed();
+  await vod.loadSeriesInfo(series);
+  const played = [];
+  globalThis.__catalogPlayer.playVod = (item, at) => played.push({ item, at });
+  globalThis.__catalogSettings.vodProgress['a:ep:1'] = { pos: 35, duration: 100, done: false, at: 2 };
+  vod.playEpisode(series, info.seasons[0].episodes[1]);
+  assert.equal(played[0].item.prev.key, 'a:ep:1');
+  vod.playNextItem(played[0].item.prev, true);
+  assert.equal(played[1].at, 35);
+  assert.equal(played[1].item.next.key, 'a:ep:2');
+  assert.equal(vod.seriesResumePoint(series, info).episode.id, '1');
 });

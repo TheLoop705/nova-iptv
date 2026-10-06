@@ -38,7 +38,7 @@ export function VideoLayer() {
     if (item && !source) usePlayback.getState().set({ status: 'error', error: 'This stream has no playable URL.' });
   }, [item, source]);
 
-  useMediaSession({ source, isLive: item?.kind === 'live' });
+  useMediaSession({ source, isLive: item?.kind === 'live', hasPrev: item?.kind === 'vod' && !!item.prev, hasNext: item?.kind === 'vod' && !!item.next });
   useLiveRecovery(item);
   useReturnToLiveEdge();
   useLiveHistory(item);

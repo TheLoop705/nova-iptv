@@ -129,8 +129,13 @@ test('25k movies and 10k series stay virtualized; search/downloads are shared an
   expect(count(after, 'xmltv') - count(before, 'xmltv')).toBe(1);
   expect(count(after, 'get_vod_streams:all') - count(before, 'get_vod_streams:all')).toBe(1);
   expect(count(after, 'get_series:all') - count(before, 'get_series:all')).toBe(1);
-  expect(count(after, 'get_vod_streams:category') - count(before, 'get_vod_streams:category')).toBe(1);
-  expect(count(after, 'get_series:category') - count(before, 'get_series:category')).toBe(1);
+  // Home's visible rails also load categories. This fixture has two of each;
+  // revisiting screens must share each category rather than download it again.
+  for (const action of ['get_vod_streams:category', 'get_series:category']) {
+    const requests = count(after, action) - count(before, action);
+    expect(requests).toBeGreaterThanOrEqual(1);
+    expect(requests).toBeLessThanOrEqual(2);
+  }
   await report(page, testInfo);
 });
 

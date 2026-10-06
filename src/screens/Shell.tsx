@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, BackHandler, Platform, Pressable, Text, View } from 'react-native';
+import { BackHandler, Platform, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, useLayout } from '../theme';
 import { useUI, type Screen } from '../store/ui';
@@ -12,6 +12,7 @@ import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
 import { NovaMark } from '../components/NovaMark';
+import { LoadingScreen } from '../components/LoadingScreen';
 import { GuideScreen } from './GuideScreen';
 import { HomeScreen } from './HomeScreen';
 import { VodScreen } from './VodScreen';
@@ -219,10 +220,29 @@ function RailHint({ label, shortcut }: { label: string; shortcut?: string }) {
 }
 
 function Content({ screen }: { screen: Screen }) {
+  const pid = useLibrary((st) => st.playlistId);
   const status = useLibrary((st) => st.status);
+  const error = useLibrary((st) => st.error);
   const hasChannels = useLibrary((st) => st.channels.length > 0);
-  if (!hasChannels && (status === 'loading' || status === 'idle') && screen !== 'settings') return <Loading />;
-  if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
+  const catalogStatus = useLibrary((st) => st.catalogStatus);
+  const catalogError = useLibrary((st) => st.catalogError);
+  // Xtream: both category lists failed to load (and nothing was saved)
+  const noCatalog = useLibrary((st) => st.vodStatus.movieCats === 'error' && st.vodStatus.seriesCats === 'error');
+
+  // Live TV channels load when Live TV is opened; Search asks for them too, for its channel results
+  const wantsChannels = screen === 'guide' || screen === 'search';
+  useEffect(() => {
+    if (wantsChannels && status === 'idle') useLibrary.getState().wantChannels();
+  }, [wantsChannels, status, pid]);
+
+  // Home, Movies and Series need movies and series only (and a working sign-in, so an expired account
+  // never looks like a working library). They show their own loading state.
+  if (screen === 'home' || screen === 'movies' || screen === 'series') {
+    if (catalogStatus === 'error' || noCatalog) return <LoadError error={catalogError ?? "Couldn't load movies and series."} />;
+  } else if (screen === 'guide') {
+    if (!hasChannels && (status === 'loading' || status === 'idle')) return <LoadingScreen />;
+    if (!hasChannels && status === 'error') return <LoadError error={error} />;
+  }
   switch (screen) {
     case 'home':
       return <HomeScreen />;
@@ -239,22 +259,8 @@ function Content({ screen }: { screen: Screen }) {
   }
 }
 
-function Loading() {
+function LoadError({ error }: { error?: string }) {
   const { k, type } = useLayout();
-  const message = useLibrary((st) => st.message);
-  const playlist = useActivePlaylist();
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <ActivityIndicator size="large" color={colors.accent} />
-      <Text style={[type('heading'), { color: colors.text, marginTop: k(16) }]}>{playlist?.name}</Text>
-      <Text style={[type('caption'), { color: colors.textDim, marginTop: k(4) }]}>{message ?? 'Loading…'}</Text>
-    </View>
-  );
-}
-
-function LoadError() {
-  const { k, type } = useLayout();
-  const error = useLibrary((st) => st.error);
   const playlist = useActivePlaylist();
   const openEditor = useUI((st) => st.openEditor);
   const setScreen = useUI((st) => st.setScreen);

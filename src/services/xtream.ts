@@ -40,12 +40,15 @@ function api(p: Playlist, action?: string, extra: Record<string, string | number
 }
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : v && typeof v === 'object' ? (Object.values(v) as T[]) : []);
+const rows = (v: unknown, key: string): any[] => arr<any>(v).filter((x) => x && typeof x === 'object' && x[key] != null);
+/** An explicit provider refusal, as opposed to a transient network error. */
+export class AuthError extends Error {}
 
 export async function xtreamLogin(p: Playlist, signal?: AbortSignal): Promise<XtreamAccount> {
   const data = await fetchJson<any>(api(p), { ua: p.userAgent, timeoutMs: 20000, signal });
   const ui = data?.user_info;
-  if (!ui || String(ui.auth) === '0') throw new Error('Login failed — check server, username and password.');
-  if (ui.status && ui.status !== 'Active') throw new Error(`Account status: ${ui.status}`);
+  if (!ui || String(ui.auth) === '0') throw new AuthError('Login failed — check server, username and password.');
+  if (ui.status && ui.status !== 'Active') throw new AuthError(`Account status: ${ui.status}`);
   return {
     status: ui.status,
     expDate: ui.exp_date ? Number(ui.exp_date) * 1000 : undefined,
@@ -56,7 +59,7 @@ export async function xtreamLogin(p: Playlist, signal?: AbortSignal): Promise<Xt
   };
 }
 
-export async function xtreamLive(p: Playlist, signal?: AbortSignal): Promise<Channel[]> {
+export async function xtreamLive(p: Playlist, signal?: AbortSignal, onProgress?: (bytes: number) => void): Promise<Channel[]> {
   let index = 0;
   const [cats, list] = await Promise.all([
     fetchJson<any[]>(api(p, 'get_live_categories'), { ua: p.userAgent, signal }),
@@ -75,10 +78,10 @@ export async function xtreamLive(p: Playlist, signal?: AbortSignal): Promise<Cha
       streamId: Number(s.stream_id),
       catchup: archive ? { type: 'xc', days: Number(s.tv_archive_duration) || 3 } : undefined,
     };
-    }, signal),
+    }, signal, onProgress),
   ]);
   const catName = new Map<string, string>();
-  for (const c of arr<any>(cats)) catName.set(String(c.category_id), String(c.category_name ?? ''));
+  for (const c of rows(cats, 'category_id')) catName.set(String(c.category_id), String(c.category_name ?? ''));
   const checkpoint = createCheckpoint(signal);
   for (let i = 0; i < list.length; i++) {
     list[i].group = catName.get(list[i].group) || 'Uncategorized';
@@ -94,18 +97,18 @@ export async function xtreamLive(p: Playlist, signal?: AbortSignal): Promise<Cha
 
 export async function xtreamVodCategories(p: Playlist, signal?: AbortSignal): Promise<Category[]> {
   const cats = await fetchJson<any[]>(api(p, 'get_vod_categories'), { ua: p.userAgent, signal });
-  return arr<any>(cats).map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
+  return rows(cats, 'category_id').map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
 }
 
 export async function xtreamSeriesCategories(p: Playlist, signal?: AbortSignal): Promise<Category[]> {
   const cats = await fetchJson<any[]>(api(p, 'get_series_categories'), { ua: p.userAgent, signal });
-  return arr<any>(cats).map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
+  return rows(cats, 'category_id').map((c) => ({ id: String(c.category_id), name: String(c.category_name ?? '') }));
 }
 
-async function fetchCatalog<T>(url: string, p: Playlist, normalize: (value: any) => T | undefined, signal?: AbortSignal): Promise<T[]> {
+async function fetchCatalog<T>(url: string, p: Playlist, normalize: (value: any) => T | undefined, signal?: AbortSignal, onProgress?: (bytes: number) => void): Promise<T[]> {
   const parser = new CatalogJsonParser(normalize, signal);
   try {
-    await streamText(url, { ua: p.userAgent, timeoutMs: 120000, signal }, (chunk) => parser.push(chunk));
+    await streamText(url, { ua: p.userAgent, timeoutMs: 120000, signal }, (chunk) => parser.push(chunk), onProgress);
     return parser.finish();
   } catch (error: any) {
     if (error instanceof SyntaxError) throw new Error(`Invalid catalog response from ${redact(url)}`);
@@ -139,6 +142,7 @@ export async function xtreamSeries(p: Playlist, categoryId?: string, signal?: Ab
     year: s.releaseDate ? String(s.releaseDate).slice(0, 4) : s.year ? String(s.year) : undefined,
     plot: s.plot || undefined,
     genre: s.genre || undefined,
+    backdrop: arr<string>(s.backdrop_path).find((b) => typeof b === 'string' && b) || undefined,
   }) : undefined, signal);
 }
 

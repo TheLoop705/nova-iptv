@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { AppState, Linking, Platform, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors, fonts, useLayout } from './theme';
 import { useActivePlaylist, useSettings } from './store/settings';
@@ -19,11 +20,25 @@ import { VideoLayer } from './player/VideoLayer';
 import { PlayerOverlay } from './player/PlayerOverlay';
 import { SheetHost, Toast } from './components/SheetHost';
 import { UpdateProgress } from './components/UpdateProgress';
+import { BootScreen } from './components/LoadingScreen';
 import { useAutoUpdateCheck } from './services/updates';
 import { usePlayback } from './player/playback';
 import { startPerformanceMonitor } from './services/performance';
 import { playlistLoadPlan } from './services/playlistSource';
 import type { Playlist } from './types';
+
+// Keep the launch screen up until settings are read, so startup goes splash → Nova without a blank frame
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+
+/** Retires the launch screen: the native splash, or the web page's own (public/index.html). */
+function hideSplash() {
+  void SplashScreen.hideAsync().catch(() => {});
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+  const el = document.getElementById('nova-splash');
+  if (!el) return;
+  el.style.opacity = '0';
+  setTimeout(() => el.remove(), 250);
+}
 
 if (__DEV__ && Platform.OS === 'web' && typeof window !== 'undefined') {
   // handy for poking at state from the browser console while developing
@@ -59,8 +74,17 @@ function Root() {
   useAutoUpdateCheck();
 
   useEffect(() => {
-    void useSettings.getState().hydrate();
-    return startRemote();
+    // never keep the splash up for long, even if reading settings stalls
+    const fallback = setTimeout(hideSplash, 4000);
+    void useSettings.getState().hydrate().finally(() => {
+      clearTimeout(fallback);
+      requestAnimationFrame(hideSplash);
+    });
+    const stop = startRemote();
+    return () => {
+      clearTimeout(fallback);
+      stop();
+    };
   }, []);
 
   useEffect(() => startPerformanceMonitor(() => Platform.OS === 'web'
@@ -111,15 +135,23 @@ function Root() {
       return;
     }
     let cancelled = false;
+    const load = () => {
+      void useLibrary.getState().load(activeSource, { force: plan.force });
+      const settings = useSettings.getState();
+      if (settings.prefs.startWithLastChannel && settings.lastChannel[activeSource.id]) {
+        useLibrary.getState().wantChannels();
+      }
+    };
     if (plan.force) {
       // clearCache resets immediately, aborting old requests before deleting files.
       void useLibrary.getState().clearCache(activeSource.id).then(() => {
-        if (!cancelled) void useLibrary.getState().load(activeSource, { force: true });
+        if (!cancelled) load();
       }).catch((error: unknown) => {
-        if (!cancelled) useLibrary.setState({ playlistId: activeSource.id, status: 'error',
-          error: error instanceof Error ? error.message : 'Could not clear the previous playlist cache.' });
+        const message = error instanceof Error ? error.message : 'Could not clear the previous playlist cache.';
+        if (!cancelled) useLibrary.setState({ playlistId: activeSource.id, status: 'error', error: message,
+          catalogStatus: 'error', catalogError: message });
       });
-    } else void useLibrary.getState().load(activeSource);
+    } else load();
     return () => { cancelled = true; };
   }, [hydrated, activeSource]);
 
@@ -146,7 +178,9 @@ function Root() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <StatusBar style="light" hidden={mode === 'tv' || fullscreen} />
-      {!hydrated ? null : hasPlaylists ? <Shell /> : <Onboarding />}
+      {/* Until settings are read: the web page's own splash covers the (empty) root; native shows the mark
+          in case the launch screen timed out */}
+      {!hydrated ? (Platform.OS === 'web' ? null : <BootScreen />) : hasPlaylists ? <Shell /> : <Onboarding />}
       <DetailHost />
       {editor ? <PlaylistEditor /> : null}
       <VideoLayer />

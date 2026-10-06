@@ -6,6 +6,18 @@ Android TV and a native iOS Release simulator build. The tests measure responsiv
 checking that a download eventually finishes. Provider, codec and physical-device coverage remains
 separate from these deterministic results.
 
+## Release integration — 7 October 2026
+
+The performance changes are integrated with the current Home redesign and on-demand Live TV
+loading. Source validation finishes before cached channels become visible, and persisted movie/series
+categories are scoped to the provider configuration. Shared M3U loads coalesce, and clearing hundreds
+of native cache pages yields between deletions. The final shared-code check passes **87 performance
+regressions**, typechecking and all **five update tests**.
+
+Native measurements below describe the 5 October baseline before this Home integration. The
+release integration repeats the production browser checks; physical Fire TV testing remains the
+next device check. The signed APK is built and verified by the official release workflow.
+
 ## Findings and changes
 
 | Area reviewed | Finding | Resulting behavior |

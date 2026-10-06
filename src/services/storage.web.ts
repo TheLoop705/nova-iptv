@@ -1,4 +1,4 @@
-import { createStore, del, get, set } from 'idb-keyval';
+import { createStore, del, delMany, get, keys, set } from 'idb-keyval';
 import { applyOps, diffDocAsync, type Doc, type DocOp } from '../utils/docPatch';
 import { createCheckpoint } from '../utils/cooperative';
 
@@ -203,6 +203,17 @@ export async function removeItem(key: string): Promise<void> {
   if (onServer(key) && server !== false) await call(key, 'DELETE').catch((e) => console.warn('storage.removeItem failed', key, e));
   // also clears a copy saved before the server took over
   if (idb) await del(key, idb);
+}
+
+/** Removes every key that starts with `prefix` (a playlist's per-category caches; they stay in this browser). */
+export async function removeByPrefix(prefix: string): Promise<void> {
+  if (!idb) return;
+  try {
+    const all = await keys(idb);
+    await delMany(all.filter((k) => typeof k === 'string' && k.startsWith(prefix)), idb);
+  } catch (e) {
+    console.warn('storage.removeByPrefix failed', prefix, e);
+  }
 }
 
 /** Changes to `key` made in another tab or on another device, as ops to apply to local state. */

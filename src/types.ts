@@ -77,6 +77,8 @@ export interface SeriesItem {
   year?: string;
   plot?: string;
   genre?: string;
+  /** wide artwork (Xtream lists it with the series), used by Home's billboard */
+  backdrop?: string;
 }
 
 export interface Episode {
@@ -135,5 +137,7 @@ export type PlayItem =
       poster?: string;
       userAgent?: string;
       /** next episode of a series, offered by the "Up next" countdown */
-      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>;
+      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
+      /** the episode before, for the player's Previous episode */
+      prev?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
     };

@@ -1,89 +1,154 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, ScrollView, Text, View } from 'react-native';
+import { Animated, FlatList, Platform, Pressable, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Image } from 'expo-image';
-import type { Channel } from '../types';
-import { colors, fonts, radius, useLayout } from '../theme';
-import { useLibrary, ALL } from '../store/library';
-import { useActivePlaylist, useSettings, watchId, type VodProgress, type WatchEntry } from '../store/settings';
+import { colors, radius, useLayout } from '../theme';
+import { useLibrary } from '../store/library';
+import { useActivePlaylist, useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { useUI, type MenuAnchor, type SheetOption } from '../store/ui';
-import { openSearch } from '../store/actions';
-import { Layer, useKeys } from '../input/keys';
-import { programAt } from '../services/epg';
-import { continueSeries, episodeKey, movieKey, playMovie, resumeEpisode } from '../services/vod';
+import { hasWatched, openSearch, removeFromHistory, type Watched } from '../store/actions';
+import { Layer, useInputMode, useKeyMode, useKeys } from '../input/keys';
+import { continueSeries, episodeKey, loadMovieInfo, movieKey, playMovie, resumeEpisode } from '../services/vod';
 import { imageUrl } from '../services/http';
-import { formatClock, formatDay, formatDuration } from '../utils/format';
-import { useNow } from '../utils/hooks';
-import { Focusable } from '../components/Focusable';
-import { Badge } from '../components/Badge';
-import { Logo } from '../components/Logo';
+import { formatDuration } from '../utils/format';
+import { Button } from '../components/Button';
 import { Icon } from '../components/Icon';
+import { NovaMark } from '../components/NovaMark';
+import { LoadingScreen } from '../components/LoadingScreen';
+import { useHomeRows, type HomeEntry, type HomeFilter, type HomeRow } from './home/rows';
+import { AmbientWash, Billboard, BillboardArt, FeaturedCard, FILTERS, TopBar, useHero, type HeroAction } from './home/Billboard';
+import { Rail, type RailMetrics } from './home/Rail';
 
-const MAX_RECENT = 40;
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+type Zone = 'tabs' | 'hero' | 'rows';
+
+/** Titles the spotlight takes turns with, and how long each one stays */
+const SPOTLIGHT_MAX = 6;
+const SPOTLIGHT_MS = 9000;
 
 /**
- * Home, the app's start page. Split in two on TVs and desktops: everything watched recently on the
- * left (live channels, movies and episodes, newest first) and a big Search button on the right.
+ * Home, the start page, in the style of the streaming apps: movies and series only (live channels live in
+ * the guide). TV and desktop: a full-width billboard — first a spotlight taking turns with a few titles,
+ * then, once the remote is in the rows, the focused title — above Continue watching, My List and the
+ * categories. Phones: a featured title card over its own colours, then the same rows.
  */
 export function HomeScreen() {
-  const { s, mode, type } = useLayout();
+  const { s, mode, width, height } = useLayout();
   const tv = mode === 'tv';
-  const k = tv ? s : (n: number) => n;
+  const [filter, setFilter] = useState<HomeFilter>('all');
+  const { rows, catsKnown } = useHomeRows(tv ? filter : 'all');
+  const showFilter = useLibrary((st) => !!st.movieCats?.length && !!st.seriesCats?.length);
+  const catalogStatus = useLibrary((st) => st.catalogStatus);
   const pid = useLibrary((st) => st.playlistId);
-  const byId = useLibrary((st) => st.byId);
-  const epg = useLibrary((st) => st.epg);
+  const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
-  const recents = useSettings((st) => (pid ? st.recents[pid] : undefined));
-  const recentMovies = useSettings((st) => (pid ? st.recentMovies[pid] : undefined));
-  const progress = useSettings((st) => st.vodProgress);
-  const clock24 = useSettings((st) => st.prefs.clock24);
-  const playlist = useActivePlaylist();
   const menuFocused = useUI((st) => st.menuFocused);
   const detailOpen = useUI((st) => !!st.detail);
   const sheetOpen = useUI((st) => !!st.sheet);
+  const editorOpen = useUI((st) => !!st.editor);
   const fullscreen = usePlayer((st) => st.fullscreen && !!st.item);
-  const now = useNow(30000);
 
-  // Newest first. Channels and movies watched before the history existed have no time and follow at the end.
-  const recent = useMemo(() => {
-    const out: WatchEntry[] = [];
-    const seen = new Set<string>();
-    const add = (e: WatchEntry) => {
-      if (seen.has(e.id) || out.length >= MAX_RECENT) return;
-      if (e.kind === 'live' && !byId[e.channelId]) return;
-      seen.add(e.id);
-      out.push(e);
-    };
-    [...(history ?? [])].sort((a, b) => b.at - a.at).forEach(add);
-    (recents ?? []).forEach((channelId) => add({ kind: 'live', id: watchId.live(channelId), channelId, at: 0 }));
-    (recentMovies ?? []).forEach((item) => add({ kind: 'movie', id: watchId.movie(item.id), item, at: 0 }));
+  // ---- metrics ----
+  const [box, setBox] = useState({ w: width - (tv ? s(64) : 0), h: height });
+  const m: RailMetrics = useMemo(() => {
+    const k = tv ? s : (n: number) => n;
+    const posterW = tv ? s(84) : 112;
+    const artH = (posterW - (tv ? s(5) : 4)) * 1.5 + (tv ? s(5) : 4);
+    const gap = k(tv ? 12 : 10);
+    const wideW = posterW * 2 + gap;
+    const wideH = Math.round((wideW * 9) / 16);
+    const titleH = k(tv ? 26 : 30);
+    const padY = k(tv ? 9 : 8);
+    const row = (h: number) => Math.round(titleH + padY * 2 + h);
+    return { tv, s, posterW, artH, wideW, wideH, gap, padX: k(tv ? 28 : 16), padY, titleH, rowH: row(artH), wideRowH: row(wideH), viewW: box.w };
+  }, [tv, s, box.w]);
+  const rowHeight = useCallback((r: HomeRow) => (r.wide ? m.wideRowH : m.rowH), [m]);
+
+  // ---- focus: the spotlight, or a row (kept by key, so rows loading around it don't move it) and a card per row ----
+  const [zone, setZone] = useState<Zone>(tv ? 'hero' : 'rows');
+  const [focusKey, setFocusKey] = useState<string>();
+  const [cols, setCols] = useState<Record<string, number>>({});
+  const [heroBtn, setHeroBtn] = useState(0);
+  const [tab, setTab] = useState(0);
+  const [hover, setHover] = useState<{ row: string; col: number } | null>(null);
+  const lastRow = useRef(0);
+  let rowIdx = focusKey ? rows.findIndex((r) => r.key === focusKey) : -1;
+  if (rowIdx < 0) rowIdx = Math.max(0, Math.min(lastRow.current, rows.length - 1));
+  lastRow.current = rowIdx;
+  const row = rows[rowIdx] as HomeRow | undefined;
+  const col = row ? Math.max(0, Math.min(cols[row.key] ?? 0, row.entries.length - 1)) : 0;
+  const focused = row?.entries[col];
+
+  // Desktop: the billboard follows the pointer until a key is pressed
+  const keyMode = useKeyMode();
+  // the rows have been scrolled down (by a mouse; the remote moves `zone` instead)
+  const [scrolled, setScrolled] = useState(false);
+  // TV and desktop: the spotlight is showing — at the top of Home, before the remote goes into the rows
+  const atTop = tv && (keyMode ? zone !== 'rows' : !scrolled);
+  const hovered = hover ? rows.find((r) => r.key === hover.row)?.entries[hover.col] : undefined;
+
+  // Phones: one featured title, from the first category (a different one each day)
+  const featured = useMemo(() => {
+    if (tv) return undefined;
+    const pool = (rows.find((r) => r.categoryId && r.entries.length)?.entries ?? []).filter((e) => e.type !== 'more' && e.item.poster).slice(0, 10);
+    if (pool.length) return pool[Math.floor(Date.now() / 86400000) % pool.length];
+    return rows.find((r) => r.entries.length)?.entries.find((e) => e.type !== 'more');
+  }, [rows, tv]);
+
+  // TV and desktop: a few titles from the first categories take turns in the spotlight
+  const spotlight = useMemo(() => {
+    if (!tv) return [];
+    const cats = rows.filter((r) => r.categoryId).slice(0, 4);
+    const out: Extract<HomeEntry, { type: 'movie' | 'series' }>[] = [];
+    for (let i = 0; i < 3; i++)
+      for (const r of cats) {
+        const e = r.entries.filter((x) => x.type !== 'more' && x.item.poster)[i];
+        if (e && e.type !== 'more' && out.length < SPOTLIGHT_MAX && !out.some((o) => o.item.id === e.item.id)) out.push(e);
+      }
     return out;
-  }, [history, recents, recentMovies, byId]);
+  }, [rows, tv]);
+  const [slide, setSlide] = useState(() => Math.floor(Date.now() / 86400000));
+  const spot = spotlight.length ? spotlight[slide % spotlight.length] : undefined;
+
+  const shown = tv ? (hovered ?? (atTop || !keyMode ? (spot ?? focused) : focused)) : featured;
+  const hero = useHero(shown);
 
   // ---- actions ----
-  const play = useCallback((e: WatchEntry) => {
-    if (e.kind === 'live') return usePlayer.getState().playChannel(e.channelId, { groupId: ALL, fullscreen: true });
-    if (e.kind === 'movie') return playMovie(e.item);
-    void continueSeries(e.series, e.episode);
+  const play = useCallback((e: HomeEntry) => {
+    if (e.type === 'more') return useUI.getState().openCategory(e.kind, e.categoryId);
+    if (e.type === 'movie') return playMovie(e.item);
+    void continueSeries(e.item, e.episode);
   }, []);
 
+  const open = useCallback(
+    (r: HomeRow, e: HomeEntry) => {
+      if (e.type === 'more') return useUI.getState().openCategory(e.kind, e.categoryId);
+      if (r.resume) return play(e);
+      useUI.getState().setDetail(e.type === 'movie' ? { kind: 'movie', item: e.item } : { kind: 'series', item: e.item });
+    },
+    [play]
+  );
+
+  const toggleList = useCallback(
+    (e: Extract<HomeEntry, { type: 'movie' | 'series' }>) => {
+      if (!pid) return;
+      useSettings.getState().toggleVodFavorite(pid, e.type === 'movie' ? { kind: 'movie', item: e.item } : { kind: 'series', item: e.item });
+    },
+    [pid]
+  );
+
   const openOptions = useCallback(
-    (e: WatchEntry, anchor?: MenuAnchor) => {
+    (e: HomeEntry | undefined, anchor?: MenuAnchor) => {
+      if (!e || e.type === 'more' || !pid) return;
       const ui = useUI.getState();
       const st = useSettings.getState();
-      const remove: SheetOption = { label: 'Remove from recently watched', icon: 'close-circle-outline', onSelect: () => pid && st.removeHistory(pid, e.id) };
-      if (e.kind === 'live') {
-        const ch = byId[e.channelId];
-        return ui.openSheet({ anchor, title: ch ? `${ch.num}  ${ch.name}` : 'Channel', options: [{ label: 'Watch', icon: 'play-circle-outline', onSelect: () => play(e) }, remove] });
-      }
-      const key = e.kind === 'movie' ? movieKey(e.item) : episodeKey(e.episode);
-      const pr = st.vodProgress[key];
-      const resume = pr && pr.pos > 0;
-      const watched: SheetOption = pr?.done
-        ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => st.setWatched(key, false) }
-        : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) };
-      if (e.kind === 'movie') {
+      const inList = (st.vodFavorites[pid] ?? []).some((f) => f.item.id === e.item.id);
+      const list: SheetOption = { label: inList ? 'Remove from My List' : 'Add to My List', icon: inList ? 'playlist-remove' : 'playlist-plus', onSelect: () => toggleList(e) };
+      const watched: Watched = e.type === 'movie' ? { kind: 'movie', item: e.item } : { kind: 'series', item: e.item };
+      const remove: SheetOption[] = e.historyId || hasWatched(watched) ? [{ label: 'Remove from history', icon: 'delete-clock-outline', onSelect: () => void removeFromHistory(watched) }] : [];
+      if (e.type === 'movie') {
+        const key = movieKey(e.item);
+        const pr = st.vodProgress[key];
+        const resume = pr && pr.pos > 0;
         return ui.openSheet({
           anchor,
           title: e.item.name,
@@ -91,71 +156,154 @@ export function HomeScreen() {
           options: [
             { label: resume ? `Resume ${formatDuration(pr.pos)}` : 'Play', icon: 'play', onSelect: () => playMovie(e.item) },
             ...(resume ? [{ label: 'Play from the beginning', icon: 'restart', onSelect: () => playMovie(e.item, true) }] : []),
-            watched,
             { label: 'Movie details', icon: 'information-outline', onSelect: () => ui.setDetail({ kind: 'movie', item: e.item }) },
-            remove,
+            list,
+            pr?.done
+              ? { label: 'Mark as unwatched', icon: 'check-circle-outline', onSelect: () => st.setWatched(key, false) }
+              : { label: 'Mark as watched', icon: 'check-circle', onSelect: () => st.setWatched(key, true) },
+            ...remove,
           ],
         });
       }
       const ep = e.episode;
+      const pr = ep ? st.vodProgress[episodeKey(ep)] : undefined;
+      const resume = pr && pr.pos > 0;
       return ui.openSheet({
         anchor,
-        title: e.series.name,
-        subtitle: `S${ep.season} E${ep.episode} · ${ep.title}`,
+        title: e.item.name,
+        subtitle: ep ? `S${ep.season} E${ep.episode} · ${ep.title}` : e.item.year,
         options: [
           { label: resume ? `Resume ${formatDuration(pr.pos)}` : pr?.done ? 'Play next episode' : 'Play', icon: 'play', onSelect: () => play(e) },
-          { label: `Play S${ep.season} E${ep.episode} from the beginning`, icon: 'restart', onSelect: () => void resumeEpisode(e.series, ep, true) },
-          watched,
-          { label: 'Series details', icon: 'information-outline', onSelect: () => ui.setDetail({ kind: 'series', item: e.series }) },
-          remove,
+          ...(ep ? [{ label: `Play S${ep.season} E${ep.episode} from the beginning`, icon: 'restart', onSelect: () => void resumeEpisode(e.item, ep, true) }] : []),
+          { label: 'Episodes', icon: 'format-list-bulleted', onSelect: () => ui.setDetail({ kind: 'series', item: e.item }) },
+          list,
+          ...remove,
         ],
       });
     },
-    [byId, pid, play]
+    [pid, play, toggleList]
   );
 
-  // ---- remote: the list on the left, the Search button on the right ----
-  const [zone, setZone] = useState<'list' | 'search'>(recent.length ? 'list' : 'search');
-  const [idx, setIdx] = useState(0);
-  const listRef = useRef<FlatList<WatchEntry>>(null);
-  const rowH = tv ? s(76) : 84;
+  // Billboard buttons for the title it shows
+  const shownKey = shown?.type === 'movie' ? movieKey(shown.item) : shown?.type === 'series' && shown.episode ? episodeKey(shown.episode) : undefined;
+  const shownProgress = useSettings((st) => (shownKey ? st.vodProgress[shownKey] : undefined));
+  const actions: HeroAction[] = useMemo(() => {
+    const e = shown;
+    if (!e) return [];
+    if (e.type === 'more') return [{ id: 'all', label: 'See all', icon: 'view-grid-outline', primary: true, run: () => play(e) }];
+    const inList = (favs ?? []).some((f) => f.item.id === e.item.id);
+    const started = e.type === 'movie' ? !!shownProgress && shownProgress.pos > 0 : !!e.episode || !!history?.some((h) => h.kind === 'episode' && h.series.id === e.item.id);
+    const out: HeroAction[] = [
+      { id: 'play', label: e.type === 'movie' ? (started ? 'Resume' : 'Play') : started ? 'Continue' : 'Play', icon: 'play', primary: true, run: () => play(e) },
+      {
+        id: 'info',
+        label: e.type === 'movie' ? 'More info' : 'Episodes',
+        icon: e.type === 'movie' ? 'information-outline' : 'format-list-bulleted',
+        run: () => useUI.getState().setDetail(e.type === 'movie' ? { kind: 'movie', item: e.item } : { kind: 'series', item: e.item }),
+      },
+      { id: 'list', label: 'My List', icon: inList ? 'check' : 'plus', run: () => toggleList(e) },
+    ];
+    // phones put Play in the middle, like the Netflix app
+    return tv ? out : [out[2], out[0], { ...out[1], label: e.type === 'movie' ? 'Info' : 'Episodes' }];
+  }, [shown, favs, history, shownProgress, play, toggleList, tv]);
 
-  useEffect(() => {
-    if (!recent.length) setZone('search');
-    else if (idx >= recent.length) setIdx(recent.length - 1);
-  }, [recent.length, idx]);
+  // ---- filter: All / Movies / Series ----
+  const applyFilter = (f: HomeFilter) => {
+    if (f === filter) return;
+    setFilter(f);
+    setFocusKey(undefined);
+    setCols({});
+    setHover(null);
+    lastRow.current = 0;
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  };
 
-  useEffect(() => {
-    if (zone === 'list') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 2) * rowH), animated: true });
-  }, [idx, zone, rowH]);
+  // ---- remote ----
+  const focusRow = (i: number) => {
+    const r = rows[Math.max(0, Math.min(rows.length - 1, i))];
+    if (r) setFocusKey(r.key);
+  };
+  const setCol = (r: HomeRow, c: number) => setCols((p) => ({ ...p, [r.key]: Math.max(0, Math.min(r.entries.length - 1, c)) }));
 
-  const keysEnabled = !menuFocused && !detailOpen && !sheetOpen && !fullscreen;
+  const keysEnabled = !menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen && rows.length > 0;
   useKeys(
     (e) => {
-      if (zone === 'search') {
-        if (e.key === 'select') return openSearch();
-        if (e.key === 'left') return recent.length ? setZone('list') : false;
-        return e.key === 'up' || e.key === 'down' || e.key === 'right' ? undefined : false;
+      if (hover) setHover(null);
+      if (zone === 'tabs') {
+        switch (e.key) {
+          case 'left':
+            return tab > 0 ? setTab(tab - 1) : false;
+          case 'right':
+            return setTab(Math.min(FILTERS.length - 1, tab + 1));
+          case 'select':
+            return applyFilter(FILTERS[tab].id);
+          case 'down':
+          case 'back':
+            return setZone('hero');
+          case 'up':
+            return;
+          default:
+            return false;
+        }
       }
-      const cur = recent[idx];
+      if (zone === 'hero') {
+        switch (e.key) {
+          case 'left':
+            return heroBtn > 0 ? setHeroBtn(heroBtn - 1) : false;
+          case 'right':
+            return setHeroBtn(Math.min(actions.length - 1, heroBtn + 1));
+          case 'down':
+            return setZone('rows');
+          case 'select':
+            return actions[heroBtn]?.run();
+          case 'menu':
+            return openOptions(shown);
+          case 'playpause':
+            return shown ? play(shown) : undefined;
+          case 'chup':
+            return setSlide((i) => i - 1 + spotlight.length);
+          case 'chdown':
+            return setSlide((i) => i + 1);
+          case 'up':
+            if (!showFilter) return;
+            setTab(FILTERS.findIndex((f) => f.id === filter));
+            return setZone('tabs');
+          default:
+            return false;
+        }
+      }
+      if (!row) return false;
       switch (e.key) {
         case 'up':
-          return setIdx((i) => Math.max(0, i - 1));
+          if (rowIdx > 0) return focusRow(rowIdx - 1);
+          if (!tv) return;
+          setHeroBtn(0);
+          return setZone('hero');
         case 'down':
-          return setIdx((i) => Math.min(recent.length - 1, i + 1));
-        case 'chup':
-          return setIdx((i) => Math.max(0, i - 5));
-        case 'chdown':
-          return setIdx((i) => Math.min(recent.length - 1, i + 5));
-        case 'right':
-          return setZone('search');
+          return focusRow(rowIdx + 1);
         case 'left':
-          return false; // on to the menu
+          return col > 0 ? setCol(row, col - 1) : false; // on to the menu
+        case 'right':
+          return setCol(row, col + 1);
+        case 'chup':
+          return focusRow(rowIdx - 3);
+        case 'chdown':
+          return focusRow(rowIdx + 3);
         case 'select':
-          if (!cur) return;
-          return e.long ? openOptions(cur) : play(cur);
+          if (!focused) return;
+          return e.long ? openOptions(focused) : open(row, focused);
         case 'menu':
-          return cur ? openOptions(cur) : undefined;
+          return openOptions(focused);
+        case 'playpause':
+          return focused ? play(focused) : undefined;
+        case 'back':
+          // back to the top first (TV: the spotlight), then to the menu
+          if (!tv && rowIdx === 0 && col === 0) return false;
+          setCol(row, 0);
+          focusRow(0);
+          if (!tv) return;
+          setHeroBtn(0);
+          return setZone('hero');
         default:
           return false;
       }
@@ -164,252 +312,233 @@ export function HomeScreen() {
     Layer.screen
   );
 
-  const hour = new Date(now).getHours();
-  const greeting = hour < 5 ? 'Good evening' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  // ---- the spotlight: the next title every few seconds while it's on screen and no card is pointed at ----
+  const spotlightOn = atTop && !hover && keysEnabled && spotlight.length > 1;
+  useEffect(() => {
+    if (!spotlightOn) return;
+    const t = setTimeout(() => setSlide((i) => i + 1), SPOTLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [spotlightOn, slide, heroBtn]);
+  // the next title's details and artwork, so it arrives complete
+  useEffect(() => {
+    if (!spotlightOn) return;
+    const next = spotlight[(slide + 1) % spotlight.length];
+    const prefetch = (uri?: string) => {
+      const url = uri && imageUrl(uri);
+      if (url) Image.prefetch(url).catch(() => {});
+    };
+    if (next.type === 'series') prefetch(next.item.backdrop);
+    else
+      loadMovieInfo(next.item).then(
+        (info) => prefetch(info?.backdrop),
+        () => {}
+      );
+  }, [spotlightOn, slide, spotlight]);
 
-  const header = (
-    <View style={{ marginBottom: tv ? s(14) : 14 }}>
-      <Text style={[type('display'), { color: colors.text }]}>{greeting}</Text>
-      <Text style={[type('body'), { color: colors.textDim, marginTop: k(2) }]}>{playlist?.name}</Text>
-    </View>
+  // ---- rows: where each one starts ----
+  const offsets = useMemo(() => {
+    const out = [0];
+    for (const r of rows) out.push(out[out.length - 1] + rowHeight(r));
+    return out;
+  }, [rows, rowHeight]);
+
+  // ---- the billboard: tall for the spotlight, shorter once in the rows; it always stays on screen ----
+  const compactH = Math.round(Math.max(s(200), Math.min(s(300), box.h - m.rowH * 1.25)));
+  // under the spotlight, the first row shows whole and the next one peeks out
+  const firstRow = rows[0] ? rowHeight(rows[0]) : m.rowH;
+  const expandedH = Math.round(Math.max(compactH, Math.min(box.h * 0.64, box.h - firstRow - m.titleH - m.padY - m.artH * 0.3)));
+  const expanded = atTop;
+  const heroH = expanded ? expandedH : compactH;
+  const heroAnim = useRef(new Animated.Value(heroH)).current;
+  const sized = useRef(false);
+  useEffect(() => {
+    // the first size is set, not animated
+    if (!sized.current) {
+      heroAnim.setValue(heroH);
+      sized.current = rows.length > 0;
+      return;
+    }
+    Animated.timing(heroAnim, { toValue: heroH, duration: 320, useNativeDriver: false }).start();
+  }, [heroH, heroAnim, rows.length]);
+  const artH = useMemo(() => Animated.add(heroAnim, s(56)), [heroAnim, s]);
+
+  // ---- scrolling: the focused row sits right under the billboard ----
+  const listRef = useRef<FlatList<HomeRow>>(null);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = e.nativeEvent.contentOffset.y;
+    setScrolled((was) => (was ? y > 0 : y > 12));
+  }, []);
+  // Web: the mouse wheel scrolls the rows wherever the pointer is, the billboard included
+  const rootRef = useRef<View>(null);
+  const ready = rows.length > 0;
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !tv || !ready) return;
+    const root = rootRef.current as unknown as HTMLElement | null;
+    if (!root?.addEventListener) return;
+    const onWheel = (e: WheelEvent) => {
+      const list = (listRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null)?.getScrollableNode?.();
+      if (!list || list.contains(e.target as Node) || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      list.scrollTop += e.deltaY;
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, [tv, ready]);
+  const [headerH, setHeaderH] = useState(0);
+  useEffect(() => {
+    if (tv) listRef.current?.scrollToOffset({ offset: zone === 'rows' ? (offsets[rowIdx] ?? 0) : 0, animated: true });
+    else if (keysEnabled) listRef.current?.scrollToOffset({ offset: Math.max(0, headerH + (offsets[rowIdx] ?? 0) - 8), animated: true });
+    // only when the remote moves, not when the pointer scrolls the list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowIdx, zone, m.rowH, tv]);
+
+  // ---- pointer ----
+  const handlers = useRef({ press: (_r: string, _c: number) => {}, menu: (_r: string, _c: number, _a?: MenuAnchor) => {} });
+  handlers.current = {
+    press: (rk, c) => {
+      const r = rows.find((x) => x.key === rk);
+      const e = r?.entries[c];
+      if (!r || !e) return;
+      // the zone stays, so the billboard doesn't resize under the pointer
+      setFocusKey(rk);
+      setCol(r, c);
+      open(r, e);
+    },
+    menu: (rk, c, anchor) => openOptions(rows.find((x) => x.key === rk)?.entries[c], anchor),
+  };
+  const onPress = useCallback((rk: string, c: number) => handlers.current.press(rk, c), []);
+  const onMenu = useCallback((rk: string, c: number, a?: MenuAnchor) => handlers.current.menu(rk, c, a), []);
+  const onHover = useCallback((rk: string, c: number) => {
+    // rows sliding under a resting pointer while the remote/keyboard drives shouldn't take the billboard
+    if (useInputMode.getState().mode !== 'pointer') return;
+    setHover((h) => (h?.row === rk && h.col === c ? h : { row: rk, col: c }));
+  }, []);
+
+  const renderRow = useCallback(
+    ({ item: r, index }: { item: HomeRow; index: number }) => (
+      <Rail
+        rowKey={r.key}
+        title={r.title}
+        kindLabel={r.kindLabel}
+        kind={r.kind}
+        categoryId={r.categoryId}
+        entries={r.entries}
+        loading={r.loading}
+        wide={r.wide}
+        focusCol={zone === 'rows' && index === rowIdx ? col : -1}
+        active={zone === 'rows' && index === rowIdx}
+        m={m}
+        onPress={onPress}
+        onMenu={onMenu}
+        onHover={tv ? onHover : undefined}
+      />
+    ),
+    [zone, rowIdx, col, m, tv, onPress, onMenu, onHover]
   );
 
-  const renderRow = (e: WatchEntry, index: number) => (
-    <WatchRow
-      key={e.id}
-      entry={e}
-      channel={e.kind === 'live' ? byId[e.channelId] : undefined}
-      epg={e.kind === 'live' ? epg[e.channelId] : undefined}
-      progress={e.kind === 'movie' ? progress[movieKey(e.item)] : e.kind === 'episode' ? progress[episodeKey(e.episode)] : undefined}
-      height={rowH}
-      focused={zone === 'list' && index === idx}
-      now={now}
-      clock24={clock24}
-      tv={tv}
-      k={k}
-      onPress={() => {
-        setZone('list');
-        setIdx(index);
-        play(e);
-      }}
-      onMenu={(anchor) => openOptions(e, anchor)}
+  // ---- states before there's anything to show ----
+  if (!rows.length) {
+    if (!catsKnown || catalogStatus === 'loading' || catalogStatus === 'idle') return <LoadingScreen message="Loading movies and series…" />;
+    return <EmptyHome enabled={!menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen} />;
+  }
+
+  const list = (
+    <FlatList
+      ref={listRef}
+      data={rows}
+      keyExtractor={(r) => r.key}
+      renderItem={renderRow}
+      extraData={renderRow}
+      getItemLayout={(d, i) => ({ length: d?.[i] ? rowHeight(d[i]) : m.rowH, offset: (tv ? 0 : headerH) + (offsets[i] ?? 0), index: i })}
+      initialNumToRender={tv ? 3 : 4}
+      maxToRenderPerBatch={3}
+      windowSize={5}
+      showsVerticalScrollIndicator={false}
+      onScroll={tv ? onScroll : undefined}
+      scrollEventThrottle={64}
+      ListHeaderComponent={
+        tv ? undefined : (
+          <View onLayout={(e) => setHeaderH(e.nativeEvent.layout.height)} style={{ paddingBottom: 12 }}>
+            <AmbientWash uri={hero?.poster} height={headerH + 60} />
+            <PhoneHeader />
+            {hero ? <FeaturedCard hero={hero} actions={actions} /> : null}
+          </View>
+        )
+      }
+      // TV: room for the last row to come up under the billboard
+      contentContainerStyle={{ paddingBottom: tv ? Math.max(0, box.h - compactH - (rows.length ? rowHeight(rows[rows.length - 1]) : 0)) : 24 }}
     />
   );
 
-  // TV/desktop: its own scrolling list; phones: rows inside the page's scroll view
-  const list = recent.length ? (
-    tv ? (
-      <FlatList
-        ref={listRef}
-        data={recent}
-        keyExtractor={(e) => e.id}
-        getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
-        contentContainerStyle={{ paddingBottom: s(24) }}
-        showsVerticalScrollIndicator={false}
-        renderItem={({ item: e, index }) => renderRow(e, index)}
-      />
-    ) : (
-      <View>{recent.map(renderRow)}</View>
-    )
-  ) : (
-    <View style={{ paddingVertical: tv ? s(30) : 24, alignItems: 'flex-start' }}>
-      <Icon name="history" size={k(34)} color={colors.muted} />
-      <Text style={{ color: colors.text, fontSize: k(16), fontWeight: '800', marginTop: k(10), fontFamily: fonts.regular }}>Nothing watched yet</Text>
-      <Text style={{ color: colors.textDim, fontSize: k(12.5), marginTop: k(4), maxWidth: k(360), fontFamily: fonts.regular }}>
-        Channels, movies and episodes you watch show up here, newest first, with where you left off.
+  return (
+    <View ref={rootRef} style={{ flex: 1 }} onLayout={(e) => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
+      {tv ? (
+        <>
+          <BillboardArt hero={hero} width={box.w} height={artH} heroH={heroH} />
+          <Billboard
+            hero={hero}
+            actions={actions}
+            focusedAction={zone === 'hero' ? heroBtn : -1}
+            height={heroAnim}
+            width={box.w}
+            expanded={expanded}
+            slides={atTop && !hover && spotlight.length > 1 ? { count: spotlight.length, index: slide % spotlight.length, onSelect: setSlide } : undefined}
+          />
+          {expanded ? <TopBar filter={filter} focusedTab={zone === 'tabs' ? tab : -1} showFilter={showFilter} onSelect={applyFilter} /> : null}
+        </>
+      ) : null}
+      {list}
+    </View>
+  );
+}
+
+/** Phones: the Nova mark, the playlist, and search. */
+function PhoneHeader() {
+  const { type } = useLayout();
+  const playlist = useActivePlaylist();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}>
+      <NovaMark size={30} />
+      <Text numberOfLines={1} style={[type('heading'), { color: colors.text, marginLeft: 10, flex: 1 }]}>
+        {playlist?.name ?? 'Nova'}
       </Text>
-    </View>
-  );
-
-  const search = <SearchButton focused={zone === 'search'} tv={tv} k={k} onPress={openSearch} />;
-
-  if (!tv) {
-    return (
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
-        {header}
-        {search}
-        <Text style={[type('heading'), { color: colors.text, marginTop: 22, marginBottom: 8 }]}>Recently watched</Text>
-        {list}
-      </ScrollView>
-    );
-  }
-
-  return (
-    <View style={{ flex: 1, flexDirection: 'row', paddingTop: s(24), paddingLeft: s(28), paddingRight: s(24) }}>
-      <View style={{ flex: 1.15, paddingRight: s(24) }}>
-        {header}
-        <Text style={[type('heading'), { color: zone === 'list' ? colors.text : colors.textDim, marginBottom: s(8) }]}>Recently watched</Text>
-        <View style={{ flex: 1 }}>{list}</View>
-      </View>
-      <View style={{ width: 1, backgroundColor: colors.border, marginBottom: s(24) }} />
-      <View style={{ flex: 1, paddingLeft: s(24) }}>
-        <Text style={[type('title'), { color: colors.text, alignSelf: 'flex-end', fontVariant: ['tabular-nums'] }]}>{formatClock(now, clock24)}</Text>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: s(40) }}>{search}</View>
-      </View>
-    </View>
-  );
-}
-
-/** "12 min ago", "Today 17:01", "Yesterday 21:30"; nothing for entries from before the history existed. */
-function watchedAgo(at: number, now: number, clock24: boolean): string | undefined {
-  if (!at) return undefined;
-  const min = Math.floor((now - at) / 60000);
-  if (min < 1) return 'Just now';
-  if (min < 60) return `${min} min ago`;
-  return `${formatDay(at, now)} ${formatClock(at, clock24)}`;
-}
-
-function SearchButton({ focused, tv, k, onPress }: { focused: boolean; tv: boolean; k: (n: number) => number; onPress: () => void }) {
-  const hint = Platform.OS === 'web' ? `or press ${isMac ? '⌘K' : 'Ctrl K'}` : Platform.isTV ? 'Hold ☰ Menu to search by voice' : undefined;
-  if (!tv) {
-    return (
-      <Focusable
-        focused={focused}
-        onPress={onPress}
+      <Pressable
+        focusable={false}
+        onPress={openSearch}
+        hitSlop={6}
+        accessibilityRole="button"
         accessibilityLabel="Search"
-        style={{ flexDirection: 'row', alignItems: 'center', height: 56, borderRadius: radius.pill, paddingHorizontal: 20, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border }}
+        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? colors.surface3 : colors.surface2 })}
       >
-        <Icon name="magnify" size={24} color={colors.accent} />
-        <Text style={{ color: colors.textDim, fontSize: 16, marginLeft: 12, fontFamily: fonts.regular }}>Search channels, movies and series</Text>
-      </Focusable>
-    );
-  }
-  return (
-    <Focusable
-      focused={focused}
-      alwaysShowFocus={false}
-      onPress={onPress}
-      accessibilityLabel="Search"
-      style={{ alignItems: 'center', justifyContent: 'center', width: k(260), paddingVertical: k(30), borderRadius: k(radius.xl), backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
-      hoverStyle={{ backgroundColor: colors.surface2, borderColor: colors.borderStrong }}
-      focusStyle={{ backgroundColor: colors.focus, borderColor: colors.focus, transform: [{ scale: 1.04 }] }}
-    >
-      {({ focused: f }) => (
-        <>
-          <View style={{ width: k(84), height: k(84), borderRadius: k(42), alignItems: 'center', justifyContent: 'center', backgroundColor: f ? colors.focusText : colors.accentFill }}>
-            <Icon name="magnify" size={k(44)} color={f ? colors.focus : colors.onAccent} />
-          </View>
-          <Text style={{ color: f ? colors.focusText : colors.text, fontSize: k(22), fontWeight: '800', marginTop: k(14), fontFamily: fonts.regular }}>Search</Text>
-          <Text style={{ color: f ? colors.focusDim : colors.textDim, fontSize: k(12.5), marginTop: k(4), textAlign: 'center', fontFamily: fonts.regular }}>Channels, movies and series</Text>
-          {hint ? <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11), marginTop: k(10), fontFamily: fonts.regular }}>{hint}</Text> : null}
-        </>
-      )}
-    </Focusable>
+        <Icon name="magnify" size={24} color={colors.text} />
+      </Pressable>
+    </View>
   );
 }
 
-function WatchRow({
-  entry,
-  channel,
-  epg,
-  progress,
-  height,
-  focused,
-  now,
-  clock24,
-  tv,
-  k,
-  onPress,
-  onMenu,
-}: {
-  entry: WatchEntry;
-  channel?: Channel;
-  epg?: ReturnType<typeof useLibrary.getState>['epg'][string];
-  progress?: VodProgress;
-  height: number;
-  focused: boolean;
-  now: number;
-  clock24: boolean;
-  tv: boolean;
-  k: (n: number) => number;
-  onPress: () => void;
-  onMenu: (anchor?: MenuAnchor) => void;
-}) {
-  const thumbH = height - k(12);
-  const thumbW = Math.round((thumbH * 16) / 9);
-  let image: string | undefined;
-  let badge: { label: string; tone: 'live' | 'catchup' | 'neutral' };
-  let title: string;
-  let line1: string | undefined;
-  let fraction = 0;
-  let done = false;
-
-  if (entry.kind === 'live') {
-    const p = programAt(epg, now);
-    badge = { label: 'LIVE', tone: 'live' };
-    title = channel ? channel.name : 'Channel';
-    line1 = p ? `${p.title} · ${formatClock(p.start, clock24)} – ${formatClock(p.end, clock24)}` : channel ? `Channel ${channel.num}` : undefined;
-    fraction = p ? (now - p.start) / (p.end - p.start) : 0;
-  } else {
-    const resume = progress && progress.pos > 0 && progress.dur > 0;
-    done = !!progress?.done && !resume;
-    fraction = resume ? progress!.pos / progress!.dur : 0;
-    const left = resume ? `${Math.max(1, Math.round((progress!.dur - progress!.pos) / 60))} min left` : done ? 'Watched' : undefined;
-    if (entry.kind === 'movie') {
-      image = entry.item.poster;
-      badge = { label: 'MOVIE', tone: 'neutral' };
-      title = entry.item.name;
-      line1 = [left, entry.item.year].filter(Boolean).join(' · ') || undefined;
-    } else {
-      image = entry.episode.image || entry.series.poster;
-      badge = { label: 'SERIES', tone: 'catchup' };
-      title = entry.series.name;
-      line1 = [`S${entry.episode.season} E${entry.episode.episode} · ${entry.episode.title}`, left].filter(Boolean).join(' · ');
-    }
-  }
-  const when = watchedAgo(entry.at, now, clock24);
-
+/** A playlist without movies or series (live channels only). */
+function EmptyHome({ enabled }: { enabled: boolean }) {
+  const { k, type } = useLayout();
+  const setScreen = useUI((st) => st.setScreen);
+  useKeys(
+    (e) => {
+      if (e.key === 'select') return setScreen('guide');
+      if (e.key === 'up' || e.key === 'down' || e.key === 'right') return;
+      return false;
+    },
+    enabled,
+    Layer.screen
+  );
   return (
-    <Focusable
-      focused={focused}
-      onPress={onPress}
-      onLongPress={() => onMenu()}
-      onContextMenu={onMenu}
-      accessibilityLabel={title}
-      style={{ height: height - k(6), marginBottom: k(6), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(6), backgroundColor: colors.surface }}
-      focusStyle={{ backgroundColor: colors.focus, transform: [{ scale: 1.02 }] }}
-    >
-      {({ focused: f }) => (
-        <>
-          <View style={{ width: thumbW, height: thumbH, borderRadius: k(radius.sm), backgroundColor: colors.surface2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
-            {entry.kind === 'live' ? (
-              channel ? <Logo uri={channel.logo} name={channel.name} size={thumbH * 0.42} rounded={k(5)} /> : null
-            ) : image ? (
-              <Image source={{ uri: imageUrl(image) }} style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }} contentFit="cover" cachePolicy="memory-disk" recyclingKey={image} transition={150} />
-            ) : (
-              <Icon name={entry.kind === 'movie' ? 'movie-open-outline' : 'television-play'} size={thumbH * 0.4} color={colors.muted} />
-            )}
-            {done ? (
-              <View style={{ position: 'absolute', top: k(4), right: k(4), backgroundColor: colors.videoScrim, borderRadius: radius.pill, padding: k(1.5) }}>
-                <Icon name="check-circle" size={k(13)} color={colors.success} />
-              </View>
-            ) : null}
-            {fraction > 0 ? (
-              <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: k(3.5), backgroundColor: colors.videoScrim }}>
-                <View style={{ width: `${Math.min(100, fraction * 100)}%`, height: '100%', backgroundColor: entry.kind === 'live' ? colors.live : colors.accent }} />
-              </View>
-            ) : null}
-          </View>
-          <View style={{ flex: 1, marginLeft: k(12), marginRight: k(8) }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Badge label={badge.label} tone={badge.tone} />
-              <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : colors.text, fontSize: k(14), fontWeight: '700', fontFamily: fonts.regular }}>
-                {title}
-              </Text>
-            </View>
-            {line1 ? (
-              <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.textDim, fontSize: k(12), marginTop: k(4), fontFamily: fonts.regular }}>
-                {line1}
-              </Text>
-            ) : null}
-          </View>
-          {when ? (
-            <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11), marginRight: k(6), fontVariant: ['tabular-nums'], fontFamily: fonts.regular }}>
-              {when}
-            </Text>
-          ) : null}
-        </>
-      )}
-    </Focusable>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <Icon name="movie-open-off-outline" size={k(40)} color={colors.muted} />
+      <Text style={[type('heading'), { color: colors.text, marginTop: k(12), textAlign: 'center' }]}>No movies or series here yet</Text>
+      <Text style={[type('body'), { color: colors.textDim, marginTop: k(6), textAlign: 'center', maxWidth: k(460) }]}>
+        This playlist only has live channels. When your provider adds movies or series, they show up here.
+      </Text>
+      <View style={{ marginTop: k(20) }}>
+        <Button label="Open Live TV" icon="television-classic" primary focused onPress={() => setScreen('guide')} />
+      </View>
+    </View>
   );
 }

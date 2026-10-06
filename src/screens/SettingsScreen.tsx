@@ -31,10 +31,17 @@ export function SettingsScreen() {
   const setActive = useSettings((st) => st.setActive);
   const removePlaylist = useSettings((st) => st.removePlaylist);
   const hidden = useSettings((st) => (activeId ? st.hiddenGroups[activeId] : undefined));
+  // the active playlist falls back to the first one, as everywhere else
+  const historyCount = useSettings((st) => {
+    const id = (st.playlists.find((p) => p.id === st.activeId) ?? st.playlists[0])?.id;
+    return id ? (st.history[id]?.length ?? 0) : 0;
+  });
+  const clearWatchHistory = useSettings((st) => st.clearWatchHistory);
   const account = useLibrary((st) => st.account);
   const epgFetchedAt = useLibrary((st) => st.epgFetchedAt);
   const epgStatus = useLibrary((st) => st.epgStatus);
   const channelsCount = useLibrary((st) => st.channels.length);
+  const channelStatus = useLibrary((st) => st.status);
   const updateStatus = useUpdater((st) => st.status);
   const update = useUpdater((st) => st.update);
   const updateProgress = useUpdater((st) => st.progress);
@@ -102,6 +109,40 @@ export function SettingsScreen() {
       ],
     });
 
+  const clearHistorySheet = () => {
+    if (!active) return;
+    const several = playlists.length > 1;
+    openSheet({
+      title: 'Clear watch history?',
+      subtitle: 'Recently watched movies, shows and channels, resume points and Watched marks are removed. Favorites and My List stay.',
+      options: [
+        {
+          label: several ? `Clear for “${active.name}”` : 'Clear watch history',
+          icon: 'delete-clock-outline',
+          destructive: true,
+          onSelect: () => {
+            clearWatchHistory(active.id);
+            showToast('Watch history cleared');
+          },
+        },
+        ...(several
+          ? [
+              {
+                label: 'Clear for all playlists',
+                icon: 'delete-sweep-outline',
+                destructive: true,
+                onSelect: () => {
+                  clearWatchHistory();
+                  showToast('Watch history cleared for all playlists');
+                },
+              },
+            ]
+          : []),
+        { label: 'Cancel', icon: 'close', onSelect: () => {} },
+      ],
+    });
+  };
+
   const pickNumber = (title: string, key: keyof Prefs, values: number[], unit: string) =>
     openSheet({
       title,
@@ -141,8 +182,9 @@ export function SettingsScreen() {
       id: 'lib-live',
       label: 'Live TV',
       icon: 'television-classic',
-      value: n(channelsCount, 'channel', 'channels'),
-      detail: `${n(groupsCount, 'category', 'categories')} · ${n(guideCount, 'channel', 'channels')} with TV guide`,
+      // channels load when Live TV is opened
+      value: channelStatus === 'ready' ? n(channelsCount, 'channel', 'channels') : channelStatus === 'loading' ? 'Loading…' : 'Not loaded yet',
+      detail: channelStatus === 'ready' ? `${n(groupsCount, 'category', 'categories')} · ${n(guideCount, 'channel', 'channels')} with TV guide` : 'Channels load when you open Live TV',
       run: () => useUI.getState().setScreen('guide'),
     });
     r.push({
@@ -172,6 +214,17 @@ export function SettingsScreen() {
       });
     }
 
+    r.push({ kind: 'header', label: 'Watch history' });
+    r.push({
+      kind: 'item',
+      id: 'clear-history',
+      label: 'Clear watch history',
+      icon: 'delete-clock-outline',
+      value: historyCount ? n(historyCount, 'item', 'items') : 'Empty',
+      detail: 'Recently watched and resume points',
+      run: clearHistorySheet,
+    });
+
     r.push({ kind: 'header', label: 'TV Guide' });
     r.push({
       kind: 'item',
@@ -180,7 +233,10 @@ export function SettingsScreen() {
       icon: 'calendar-refresh',
       value: epgStatus === 'loading' ? 'Updating…' : epgFetchedAt ? `Updated ${formatDay(epgFetchedAt)} ${formatClock(epgFetchedAt, prefs.clock24)}` : undefined,
       run: () => {
-        void useLibrary.getState().refreshEpg(true);
+        // the guide is matched to the channels, so they come first if Live TV hasn't been opened yet
+        const lib = useLibrary.getState();
+        lib.wantChannels();
+        lib.wantEpg(true);
         showToast('Updating TV guide…');
       },
     });
@@ -280,7 +336,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, active?.type, account, epgStatus, epgFetchedAt, prefs, hidden, activeId, channelsCount, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, catalogStatus, vodAllLoaded, updateStatus, update, updateProgress]);
+  }, [playlists, active?.id, active?.type, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, channelStatus, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, catalogStatus, vodAllLoaded, updateStatus, update, updateProgress]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;

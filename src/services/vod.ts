@@ -2,10 +2,11 @@ import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } fr
 import { useSettings, watchId } from '../store/settings';
 import { getLibraryGeneration, useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
+import { useUI } from '../store/ui';
 import { xtreamEpisodeUrl, xtreamMovieInfo, xtreamMovieUrl, xtreamSeriesInfo } from './xtream';
 import { demoSeriesInfo } from './demo';
 import { SharedRequestCache } from './requestCache';
-import { throwIfAborted } from '../utils/cooperative';
+import { createCheckpoint, throwIfAborted } from '../utils/cooperative';
 
 const activePlaylist = () => {
   const pid = useLibrary.getState().playlistId;
@@ -82,6 +83,22 @@ export function nextEpisode(series: SeriesItem, ep: Episode): Episode | undefine
   return seasons.slice(si + 1).find((s) => s.episodes.length)?.episodes[0];
 }
 
+/** Previous episode in this season, or the last episode of the preceding season. */
+export function prevEpisode(series: SeriesItem, ep: Episode): Episode | undefined {
+  syncMetadataScope();
+  const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
+  if (!info) return;
+  const si = info.seasons.findIndex((s) => s.season === ep.season);
+  if (si < 0) return;
+  const ei = info.seasons[si].episodes.findIndex((e) => e.id === ep.id);
+  if (ei > 0) return info.seasons[si].episodes[ei - 1];
+  if (ei < 0) return;
+  for (let s = si - 1; s >= 0; s--) {
+    const episodes = info.seasons[s].episodes;
+    if (episodes.length) return episodes[episodes.length - 1];
+  }
+}
+
 function episodeItem(series: SeriesItem, ep: Episode) {
   const p = activePlaylist();
   const item = {
@@ -114,6 +131,13 @@ function recordEpisode(series: SeriesItem, ep: Episode) {
   if (pid) useSettings.getState().pushHistory(pid, { kind: 'episode', id: watchId.series(series.id), series, episode: ep, at: Date.now() });
 }
 
+function linkedEpisode(series: SeriesItem, ep: Episode) {
+  const after = nextEpisode(series, ep);
+  const before = prevEpisode(series, ep);
+  return { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined,
+    prev: before ? episodeItem(series, before) : undefined };
+}
+
 export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
   syncMetadataScope();
   const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
@@ -122,16 +146,15 @@ export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) 
   if (!resolved) return;
   playingSeries = { series, info };
   const progress = useSettings.getState().vodProgress[episodeKey(resolved)];
-  const after = nextEpisode(series, resolved);
   recordEpisode(series, resolved);
   usePlayer.getState().playVod(
-    { ...episodeItem(series, resolved), next: after ? episodeItem(series, after) : undefined },
+    linkedEpisode(series, resolved),
     fromStart ? undefined : progress?.pos
   );
 }
 
 /** Play an "Up next" item, keeping the chain going to the episode after it. */
-export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>) {
+export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>, resume = false) {
   const scope = syncMetadataScope();
   const producedScope = episodeItemScopes.get(next);
   if (producedScope && producedScope !== scope) return;
@@ -143,9 +166,10 @@ export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'nex
       if (!ep) continue;
       const known = useSettings.getState().history[useLibrary.getState().playlistId ?? '']?.find((h) => h.kind === 'episode' && h.series.seriesId === Number(seriesId));
       const series = playingSeries?.series.seriesId === Number(seriesId) ? playingSeries.series : known?.kind === 'episode' ? known.series : ({ id: String(seriesId), seriesId: Number(seriesId), name: next.title, poster: next.poster } as SeriesItem);
-      const after = nextEpisode(series, ep);
+      const resumeAt = resume ? useSettings.getState().vodProgress[episodeKey(ep)] : undefined;
+      const at = resumeAt && !resumeAt.done && resumeAt.pos > 0 ? resumeAt.pos : undefined;
       recordEpisode(series, ep);
-      usePlayer.getState().playVod({ ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined });
+      usePlayer.getState().playVod(linkedEpisode(series, ep), at);
       return;
     }
   }
@@ -161,16 +185,68 @@ export async function resumeEpisode(series: SeriesItem, ep: Episode, fromStart =
   if (resolved) playEpisode(series, resolved, fromStart);
 }
 
-/** Home: pick a series up where you left it — resume the episode, or start the next one once it's watched. */
-export async function continueSeries(series: SeriesItem, ep: Episode) {
+export interface ResumePoint {
+  season: number;
+  index: number;
+  episode: Episode;
+  next: boolean;
+}
+
+/** Watch progress survives the shorter Recently watched history. */
+export function seriesResumePoint(series: SeriesItem, info: SeriesInfo): ResumePoint | undefined {
+  const pid = useLibrary.getState().playlistId;
+  const { vodProgress, history } = useSettings.getState();
+  const last = pid ? history[pid]?.find((h) => h.kind === 'episode' && h.series.id === series.id) : undefined;
+  const lastId = last?.kind === 'episode' ? last.episode.id : undefined;
+  let si = -1, ei = -1, latest = 0;
+  for (let s = 0; s < info.seasons.length; s++) for (let e = 0; e < info.seasons[s].episodes.length; e++) {
+    const ep = info.seasons[s].episodes[e];
+    const at = Math.max(vodProgress[episodeKey(ep)]?.at ?? 0, ep.id === lastId ? last!.at : 0);
+    if (at > latest) { latest = at; si = s; ei = e; }
+  }
+  if (si < 0) return;
+  const episodes = info.seasons[si].episodes;
+  const pr = vodProgress[episodeKey(episodes[ei])];
+  if (pr?.done && !(pr.pos > 0)) {
+    if (ei + 1 < episodes.length) return { season: si, index: ei + 1, episode: episodes[ei + 1], next: true };
+    for (let s = si + 1; s < info.seasons.length; s++) if (info.seasons[s].episodes.length)
+      return { season: s, index: 0, episode: info.seasons[s].episodes[0], next: true };
+  }
+  return { season: si, index: ei, episode: episodes[ei], next: false };
+}
+
+/** Resolve the resume point against current metadata before using any remembered episode. */
+export async function continueSeries(series: SeriesItem, ep?: Episode) {
   const scope = syncMetadataScope();
+  if (!seriesInfoCache.get(String(series.seriesId))) useUI.getState().showToast('Loading episodes…');
   const info = await loadSeriesInfo(series).catch(() => null);
-  if (syncMetadataScope() !== scope || !info) return;
-  const resolved = currentEpisode(info, ep);
-  if (!resolved) return;
+  if (syncMetadataScope() !== scope) return;
+  if (!info) { useUI.getState().setDetail({ kind: 'series', item: series }); return; }
+  const resolved = seriesResumePoint(series, info)?.episode ?? (ep ? currentEpisode(info, ep) : info.seasons.find((s) => s.episodes.length)?.episodes[0]);
+  if (!resolved) { useUI.getState().setDetail({ kind: 'series', item: series }); return; }
   const pr = useSettings.getState().vodProgress[episodeKey(resolved)];
   const next = pr?.done && !(pr.pos > 0) ? nextEpisode(series, resolved) : undefined;
   playEpisode(series, next ?? resolved);
+}
+
+export function peekMovieInfo(item: VodItem): MovieInfo | null | undefined {
+  syncMetadataScope();
+  return item.streamId ? movieInfoCache.get(String(item.streamId)) : null;
+}
+
+export async function seriesProgressKeys(series: SeriesItem): Promise<string[]> {
+  const scope = syncMetadataScope();
+  const info = await loadSeriesInfo(series).catch(() => null);
+  if (!info || scope !== syncMetadataScope()) return [];
+  const keys: string[] = [];
+  const checkpoint = createCheckpoint();
+  for (const season of info.seasons) for (const ep of season.episodes) {
+    if (scope !== syncMetadataScope()) return [];
+    keys.push(episodeKey(ep));
+    const pause = checkpoint();
+    if (pause) await pause;
+  }
+  return keys;
 }
 
 export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {

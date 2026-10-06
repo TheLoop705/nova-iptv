@@ -14,17 +14,18 @@ globalThis.__guideStorage = {
     saved.set(key, text);
   },
   async removeItem(key) { saved.delete(key); },
+  async removeByPrefix(prefix) { for (const key of saved.keys()) if (key.startsWith(prefix)) saved.delete(key); },
 };
 globalThis.__guideSettings = { playlists: [], prefs: { epgRefreshHours: 12, epgPastDays: 1, epgFutureDays: 2 } };
 const mocks = {
   'react-native': 'export const Platform = globalThis.__guidePlatform;',
   'expo/fetch': 'export const fetch = (...args) => globalThis.fetch(...args);',
-  'src/services/storage': 'export const getItem = (...a) => globalThis.__guideStorage.getItem(...a); export const setItem = (...a) => globalThis.__guideStorage.setItem(...a); export const removeItem = (...a) => globalThis.__guideStorage.removeItem(...a);',
+  'src/services/storage': 'export const getItem = (...a) => globalThis.__guideStorage.getItem(...a); export const setItem = (...a) => globalThis.__guideStorage.setItem(...a); export const removeItem = (...a) => globalThis.__guideStorage.removeItem(...a); export const removeByPrefix = (...a) => globalThis.__guideStorage.removeByPrefix(...a);',
   'src/store/settings': 'export const useSettings = { getState: () => globalThis.__guideSettings }; export const favCatKey = (...a) => a.join(":");',
 };
 const { XmltvParser, parseXmltvTime } = await appModule('src/services/xmltv.ts', mocks);
 const { buildEpgIndexAsync } = await appModule('src/services/epg.ts');
-const { streamText } = await appModule('src/services/http.ts');
+const { streamText, fetchText } = await appModule('src/services/http.ts');
 const { readEpgCache, writeEpgCache, removeEpgCache } = await appModule('src/services/epgCache.ts');
 const { readPlaylistCache, writePlaylistCache, removePlaylistCache } = await appModule('src/services/playlistCache.ts');
 const { useLibrary, getLibraryGeneration } = await appModule('src/store/library.ts');
@@ -125,6 +126,19 @@ test('gzip headers split across reads and asynchronous callbacks preserve UTF-8 
     active = false;
   });
   assert.equal(received, text);
+});
+
+test('playlist text loading forwards progress while preserving streamed UTF-8 decoding', async () => {
+  const text = 'Chännel One 👋';
+  const encoded = new TextEncoder().encode(text);
+  globalThis.fetch = async () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(encoded.subarray(0, 3));
+    controller.enqueue(encoded.subarray(3));
+    controller.close();
+  } }));
+  const progress = [];
+  assert.equal(await fetchText('http://guide.test/playlist', { onProgress: (bytes) => progress.push(bytes) }), text);
+  assert.deepEqual(progress, [3, encoded.length]);
 });
 
 test('truncated gzip is rejected', async () => {

@@ -5,7 +5,7 @@ import { appModule } from './helpers/load-app-module.mjs';
 const visibility = [];
 globalThis.document = { visibilityState: 'visible', addEventListener(name, handler) { if (name === 'visibilitychange') visibility.push(handler); } };
 const storage = await appModule('src/services/storage.web.ts', {
-  'idb-keyval': 'export const createStore = () => ({}); export const get = async () => null; export const set = async () => {}; export const del = async () => {};',
+  'idb-keyval': 'export const createStore = () => ({}); export const get = async () => null; export const set = async () => {}; export const del = async () => {}; export const keys = async () => []; export const delMany = async () => {};',
 });
 const { applyOps } = await appModule('src/utils/docPatch.ts');
 const originalFetch = globalThis.fetch;

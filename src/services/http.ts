@@ -44,6 +44,8 @@ export interface FetchOpts {
   ua?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** bytes received so far (big playlists and channel lists: shown on the loading screen) */
+  onProgress?: (bytes: number) => void;
 }
 
 /** Hide credentials when surfacing URLs in errors. */
@@ -62,7 +64,7 @@ export async function fetchJson<T = any>(url: string, opts?: FetchOpts): Promise
 
 export async function fetchText(url: string, opts?: FetchOpts): Promise<string> {
   const parts: string[] = [];
-  await streamText(url, { timeoutMs: 45_000, ...opts }, (t) => { parts.push(t); });
+  await streamText(url, { timeoutMs: 45_000, ...opts }, (t) => { parts.push(t); }, opts?.onProgress);
   return parts.join('');
 }
 

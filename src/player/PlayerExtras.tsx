@@ -26,7 +26,7 @@ interface GestureProps {
   seekable: boolean;
   onTap: () => void;
   onSwipeDown: () => void;
-  /** web: the mouse moved — show the controls (and cursor) again */
+  /** web: the mouse moved (the cursor shows by itself; the overlay decides about the controls) */
   onActivity?: () => void;
 }
 
@@ -47,22 +47,32 @@ export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown, 
   const rippleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const live = useRef({ seekable, onTap, onSwipeDown, onActivity });
   live.current = { seekable, onTap, onSwipeDown, onActivity };
+  // web: the cursor shows while the mouse moves, even with the controls hidden, so there's something to click with
+  const [pointing, setPointing] = useState(false);
 
-  // Web: moving the mouse brings back the cursor and controls; both hide again after the overlay's
-  // idle timeout. Browsers also send "mousemove" when content changes under a still pointer, so
-  // only real movement counts.
+  // Web: moving the mouse shows the cursor (for a couple of seconds) and tells the overlay, which may
+  // bring the controls back. Browsers also send "mousemove" when content changes under a still
+  // pointer, so only real movement counts.
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
     let last = { x: -1, y: -1, t: 0 };
+    let idle: ReturnType<typeof setTimeout> | undefined;
     const onMove = (e: MouseEvent) => {
       if (e.screenX === last.x && e.screenY === last.y) return;
       const now = Date.now();
       const throttled = now - last.t < 250;
       last = { x: e.screenX, y: e.screenY, t: throttled ? last.t : now };
-      if (!throttled) live.current.onActivity?.();
+      if (throttled) return;
+      setPointing(true);
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(() => setPointing(false), 2500);
+      live.current.onActivity?.();
     };
     window.addEventListener('mousemove', onMove, { passive: true });
-    return () => window.removeEventListener('mousemove', onMove);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      if (idle) clearTimeout(idle);
+    };
   }, []);
 
   const showRipple = (side: 'left' | 'right') => {
@@ -120,7 +130,7 @@ export function PlayerGestures({ controlsVisible, seekable, onTap, onSwipeDown, 
 
   return (
     <View
-      style={[StyleSheet.absoluteFill, Platform.OS === 'web' && !controlsVisible ? ({ cursor: 'none' } as object) : null]}
+      style={[StyleSheet.absoluteFill, Platform.OS === 'web' && !controlsVisible && !pointing ? ({ cursor: 'none' } as object) : null]}
       onLayout={(e) => (width.current = e.nativeEvent.layout.width || 1)}
       {...pan.panHandlers}
     >

@@ -28,7 +28,10 @@ export type KeyName =
   | 'slower'
   | 'pip'
   | 'volup'
-  | 'voldown';
+  | 'voldown'
+  /** previous / next track: the episode before or after (live TV: the channel) */
+  | 'prevtrack'
+  | 'nexttrack';
 
 export interface KeyEvt {
   key: KeyName;

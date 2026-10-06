@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <title>%WEB_TITLE%</title>
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+    <!-- Nova's launch screen: drawn before the app's script has loaded, removed by the app (src/App.tsx) once
+         settings are read. Mirrors BootScreen: the Nova mark, sized like useLayout() sizes it. -->
+    <style id="nova-splash-style">
+      html,
+      body {
+        background: #07080b;
+      }
+      #nova-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #07080b;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+        --mark: 64px;
+      }
+      @media (min-width: 700px) and (min-aspect-ratio: 11/10) {
+        #nova-splash {
+          --mark: clamp(46px, min(100vw * 64 / 960, 100vh * 64 / 540) * 0.86, 166px);
+        }
+      }
+      #nova-splash .mark {
+        width: var(--mark);
+        height: var(--mark);
+        border-radius: calc(var(--mark) * 0.3);
+        background: #2f6bea;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #nova-splash svg {
+        width: calc(var(--mark) * 0.58);
+        height: calc(var(--mark) * 0.58);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #nova-splash {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>
+      You need to enable JavaScript to run this app.
+    </noscript>
+    <div id="nova-splash" aria-hidden="true">
+      <div class="mark">
+        <svg viewBox="0 0 24 24"><path fill="#ffffff" d="M12,1L9,9L1,12L9,15L12,23L15,15L23,12L15,9L12,1Z" /></svg>
+      </div>
+    </div>
+    <!-- The root element for your Expo app. -->
+    <div id="root"></div>
+  </body>
+</html>

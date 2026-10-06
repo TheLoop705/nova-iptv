@@ -87,6 +87,9 @@ test('local HLS live playback keeps the same decoded surface between guide previ
   await seed(page);
   await page.getByTestId('nav-guide').click();
   await expect(page.getByTestId('screen-guide')).toBeVisible();
+  // Live channels are lazy now: the guide shell can render before there is a
+  // channel for the remote's Select command to activate.
+  await expect(page.getByTestId('screen-guide').getByText('BBC One HD', { exact: true }).last()).toBeVisible();
   await page.keyboard.press('Enter');
   const preview = await decoded(page);
   await expect(page.getByLabel('Open fullscreen', { exact: true })).toBeVisible();

@@ -102,7 +102,10 @@ interface SettingsState extends Persisted {
   setWatched: (key: string, done: boolean) => void;
   pushHistory: (playlistId: string, entry: WatchEntry) => void;
   toggleFavCategory: (playlistId: string, kind: CategoryKind, categoryId: string) => void;
-  removeHistory: (playlistId: string, id: string) => void;
+  /** forget having watched something: its history entry, recents lists and watch progress */
+  forgetWatched: (playlistId: string, what: { historyId: string; channelId?: string; movieId?: string; progressKeys?: string[] }) => void;
+  /** clear the watch history of one playlist, or of every playlist; favourites and My List stay */
+  clearWatchHistory: (playlistId?: string) => void;
   toggleVodFavorite: (playlistId: string, fav: VodFav) => void;
   pushRecentMovie: (playlistId: string, item: VodItem) => void;
   setPrefs: (p: Partial<Prefs>) => void;
@@ -192,7 +195,38 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const key = favCatKey(pid, kind);
       return { favCategories: { ...s.favCategories, [key]: toggle(s.favCategories[key], id) } };
     }),
-  removeHistory: (pid, id) => set((s) => ({ history: { ...s.history, [pid]: (s.history[pid] ?? []).filter((e) => e.id !== id) } })),
+  forgetWatched: (pid, { historyId, channelId, movieId, progressKeys = [] }) =>
+    set((s) => {
+      const vodProgress = { ...s.vodProgress };
+      for (const key of progressKeys) delete vodProgress[key];
+      const lastChannel = { ...s.lastChannel };
+      if (channelId && lastChannel[pid] === channelId) delete lastChannel[pid];
+      return {
+        history: { ...s.history, [pid]: (s.history[pid] ?? []).filter((e) => e.id !== historyId) },
+        recents: channelId ? { ...s.recents, [pid]: (s.recents[pid] ?? []).filter((c) => c !== channelId) } : s.recents,
+        recentMovies: movieId ? { ...s.recentMovies, [pid]: (s.recentMovies[pid] ?? []).filter((m) => m.id !== movieId) } : s.recentMovies,
+        lastChannel,
+        vodProgress,
+      };
+    }),
+  clearWatchHistory: (pid) =>
+    set((s) => {
+      const without = <T,>(rec: Record<string, T>) => {
+        if (!pid) return {};
+        const next = { ...rec };
+        delete next[pid];
+        return next;
+      };
+      // progress keys start with the playlist id (services/vod.ts movieKey / episodeKey)
+      const vodProgress = pid ? Object.fromEntries(Object.entries(s.vodProgress).filter(([k]) => !k.startsWith(pid + ':'))) : {};
+      return {
+        history: without(s.history),
+        recents: without(s.recents),
+        recentMovies: without(s.recentMovies),
+        lastChannel: without(s.lastChannel),
+        vodProgress,
+      };
+    }),
   toggleVodFavorite: (pid, fav) =>
     set((s) => {
       const list = s.vodFavorites[pid] ?? [];
