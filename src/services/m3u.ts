@@ -1,5 +1,6 @@
 import type { Catchup, Channel, VodItem } from '../types';
 import { hashString } from '../utils/format';
+import { createCheckpoint, throwIfAborted } from '../utils/cooperative';
 
 export interface M3UResult {
   channels: Channel[];
@@ -37,7 +38,7 @@ function splitExtinf(line: string): { attrs: Record<string, string>; name: strin
 
 const isVodUrl = (url: string) => /\/(movie|movies|vod)\//i.test(url) || /\.(mp4|mkv|avi|mov|m4v)(\?|$)/i.test(url);
 
-export function parseM3U(text: string): M3UResult {
+function* parseM3UBatches(text: string): Generator<void, M3UResult> {
   const channels: Channel[] = [];
   const movies: VodItem[] = [];
   const epgUrls: string[] = [];
@@ -49,12 +50,14 @@ export function parseM3U(text: string): M3UResult {
   let pendingUA: string | undefined;
 
   let pos = 0;
+  let linesRead = 0;
   const len = text.length;
   while (pos < len) {
     let nl = text.indexOf('\n', pos);
     if (nl === -1) nl = len;
     let line = text.slice(pos, nl).trim();
     pos = nl + 1;
+    if ((++linesRead & 127) === 0) yield;
     if (!line) continue;
     if (line.charCodeAt(0) === 0xfeff) line = line.slice(1);
 
@@ -136,11 +139,39 @@ export function parseM3U(text: string): M3UResult {
 
   // Assign numbers: keep explicit tvg-chno, fill the rest sequentially
   let next = 1;
-  const used = new Set(channels.filter((c) => c.num > 0).map((c) => c.num));
-  for (const c of channels) {
+  const used = new Set<number>();
+  for (let i = 0; i < channels.length; i++) {
+    if (channels[i].num > 0) used.add(channels[i].num);
+    if ((i & 127) === 0) yield;
+  }
+  for (let i = 0; i < channels.length; i++) {
+    const c = channels[i];
+    if ((i & 127) === 0) yield;
     if (c.num > 0) continue;
     while (used.has(next)) next++;
     c.num = next++;
   }
   return { channels, movies, epgUrls, catchup: headerCatchup };
+}
+
+/** Synchronous convenience for small fixtures and existing integrations. */
+export function parseM3U(text: string): M3UResult {
+  const parser = parseM3UBatches(text);
+  let step = parser.next();
+  while (!step.done) step = parser.next();
+  return step.value;
+}
+
+/** Production parsing shares the same parser while keeping remote input responsive. */
+export async function parseM3UAsync(text: string, signal?: AbortSignal): Promise<M3UResult> {
+  throwIfAborted(signal);
+  const checkpoint = createCheckpoint(signal);
+  const parser = parseM3UBatches(text);
+  let step = parser.next();
+  while (!step.done) {
+    const pause = checkpoint();
+    if (pause) await pause;
+    step = parser.next();
+  }
+  return step.value;
 }

@@ -1,0 +1,29 @@
+name: NovaPerformanceUI
+options:
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: NO
+    SWIFT_VERSION: '5.0'
+targets:
+  NovaPerformanceUI:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: NovaPerformanceUITests.swift
+      - path: fixture.json
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.theloop705.nova.performance-tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ''
+schemes:
+  NovaPerformanceUI:
+    build:
+      targets:
+        NovaPerformanceUI: all
+    test:
+      targets: [NovaPerformanceUI]
+      gatherCoverageData: false

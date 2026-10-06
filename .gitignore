@@ -30,8 +30,15 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# local env files (provider credentials must never enter Git)
+.env
+.env.*
+!.env.example
+output/playwright/
+output/playwright-playback/
+output/performance/
+test-results/
+playwright-report/
 
 # typescript
 *.tsbuildinfo

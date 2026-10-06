@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
+import { beginKeySample } from '../services/performance';
 
 export type KeyName =
   | 'up'
@@ -60,12 +61,17 @@ let seq = 0;
 const entries: Entry[] = [];
 
 export function dispatchKey(e: KeyEvt): boolean {
-  useInputMode.getState().setMode('key');
-  const ordered = [...entries].sort((a, b) => b.layer - a.layer || b.id - a.id);
-  for (const h of ordered) {
-    if (h.ref.current(e) !== false) return true;
+  const finish = beginKeySample();
+  try {
+    useInputMode.getState().setMode('key');
+    const ordered = [...entries].sort((a, b) => b.layer - a.layer || b.id - a.id);
+    for (const h of ordered) {
+      if (h.ref.current(e) !== false) return true;
+    }
+    return false;
+  } finally {
+    finish?.();
   }
-  return false;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
-import type { DocOp } from '../utils/docPatch';
+import type { Doc, DocOp } from '../utils/docPatch';
 
 // Native key/value storage backed by JSON files in the documents directory.
 // Playlists and EPG data can be tens of MB, so AsyncStorage (6 MB cap on Android) is not an option.
@@ -39,6 +39,6 @@ export async function removeItem(key: string): Promise<void> {
 }
 
 /** Web syncs settings between devices through the Nova server; native storage is per device. */
-export function onRemoteChange(_key: string, _listener: (ops: DocOp[]) => void): () => void {
+export function onRemoteChange(_key: string, _listener: (ops: DocOp[]) => void, _currentDoc?: () => Doc): () => void {
   return () => {};
 }

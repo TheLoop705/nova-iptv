@@ -9,9 +9,8 @@ import { Focusable } from '../components/Focusable';
 import { Logo, Poster } from '../components/Logo';
 import { Icon } from '../components/Icon';
 import { programAt } from '../services/epg';
-import { compactTitle, matchScore, queryWords } from '../services/searchMatch';
+import { searchCatalog, type SearchHit } from '../services/catalogSearch';
 import { speechAvailable, startListening } from '../services/speech';
-import type { SeriesItem, VodItem } from '../types';
 import { RemoteKeys } from '../../modules/remote-keys';
 
 interface Result {
@@ -28,6 +27,8 @@ export function SearchScreen() {
   const tv = mode === 'tv';
   const k = tv ? s : (n: number) => n * 1.1;
   const channels = useLibrary((st) => st.channels);
+  const playlistId = useLibrary((st) => st.playlistId);
+  const libraryReady = useLibrary((st) => st.status === 'ready');
   const movies = useLibrary((st) => st.movies);
   const series = useLibrary((st) => st.series);
   const epg = useLibrary((st) => st.epg);
@@ -35,12 +36,16 @@ export function SearchScreen() {
   const loadAllVod = useLibrary((st) => st.loadAllVod);
   const menuFocused = useUI((st) => st.menuFocused);
   const detail = useUI((st) => st.detail);
+  const sheetOpen = useUI((st) => !!st.sheet);
+  const fullscreen = usePlayer((st) => st.fullscreen && !!st.item);
   const setDetail = useUI((st) => st.setDetail);
   const playChannel = usePlayer((st) => st.playChannel);
   const searchNonce = useUI((st) => st.searchNonce);
   const keyMode = useKeyMode();
 
   const [q, setQ] = useState('');
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const stopVoice = useRef<(() => void) | null>(null);
@@ -49,22 +54,61 @@ export function SearchScreen() {
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<TextInput>(null);
   const listRef = useRef<FlatList<Result>>(null);
+  const keyboardTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const rowH = tv ? s(50) : 64;
 
   useEffect(() => {
-    if (q.trim().length >= 2) void loadAllVod();
-  }, [q, loadAllVod]);
+    if (!libraryReady || q.trim().length < 2) return;
+    const timer = setTimeout(() => void loadAllVod(), 180);
+    return () => clearTimeout(timer);
+  }, [q, playlistId, libraryReady, loadAllVod]);
+
+  useEffect(() => {
+    setHits([]);
+    if (q.trim().length < 2) {
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = setTimeout(() => {
+      void searchCatalog(q, { channels, movies, series }, controller.signal)
+        .then((next) => {
+          if (!controller.signal.aborted) {
+            setHits(next);
+            setSearching(false);
+          }
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            setSearching(false);
+            console.warn('Search failed', error);
+          }
+        });
+    }, 180);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q, channels, movies, series]);
 
   // Voice-search shortcut (hold Menu / Search key / "/") and remote users: open the keyboard right away.
   // On Fire TV the open keyboard is what lets the remote's mic button dictate into the field.
   const focusInput = () => {
     setZone('input');
-    setTimeout(() => inputRef.current?.focus(), 120);
+    const schedule = (run: () => void, ms: number) => {
+      const timer = setTimeout(() => {
+        keyboardTimers.current.delete(timer);
+        run();
+      }, ms);
+      keyboardTimers.current.add(timer);
+    };
+    schedule(() => inputRef.current?.focus(), 120);
     // Focusing alone doesn't raise the Android TV keyboard, so ask for it explicitly — once now,
     // and again after the shortcut key (held Menu) has been released.
     if (Platform.OS === 'android') {
       for (const ms of [300, 900]) {
-        setTimeout(() => {
+        schedule(() => {
           inputRef.current?.focus();
           RemoteKeys?.showKeyboard().catch(() => {});
         }, ms);
@@ -81,7 +125,11 @@ export function SearchScreen() {
   }, [searchNonce]);
   useEffect(() => {
     if (Platform.isTV || keyMode || Platform.OS === 'web') focusInput();
-    return () => stopVoice.current?.();
+    return () => {
+      stopVoice.current?.();
+      keyboardTimers.current.forEach(clearTimeout);
+      keyboardTimers.current.clear();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -103,66 +151,26 @@ export function SearchScreen() {
     );
   };
 
-  const results = useMemo<Result[]>(() => {
-    const words = queryWords(q.trim());
-    if (q.trim().length < 2 || !words.length) return [];
-    const now = Date.now();
-    // `dup`: providers list the same channel/movie in several categories under different IDs
-    const scored: { r: Result; score: number; kind: number; dup: string }[] = [];
-    let cCount = 0;
-    for (const c of channels) {
-      const title = compactTitle(c.name);
-      const score = matchScore(words, title);
-      if (!score) continue;
-      const p = programAt(epg[c.id], now);
-      scored.push({
-        score,
-        kind: 0,
-        dup: 'c:' + title,
-        r: {
-          key: 'c' + c.id,
-          type: 'channel',
-          title: c.name,
-          subtitle: p ? `Now: ${p.title}` : c.group,
-          image: c.logo,
-          run: () => playChannel(c.id, { groupId: 'all', fullscreen: true }),
-        },
-      });
-      if (++cCount >= 150) break;
+  const results = useMemo<Result[]>(() => hits.map((hit) => {
+    const item = hit.item;
+    if (hit.kind === 'channel') {
+      const channel = hit.item;
+      const program = programAt(epg[channel.id], Date.now());
+      return {
+        key: 'c' + channel.id, type: 'channel', title: channel.name,
+        subtitle: program ? `Now: ${program.title}` : channel.group, image: channel.logo,
+        run: () => playChannel(channel.id, { groupId: 'all', fullscreen: true }),
+      };
     }
-    const seen = new Set<string>();
-    let mCount = 0;
-    for (const list of Object.values(movies)) {
-      for (const m of list as VodItem[]) {
-        if (mCount >= 120 || seen.has(m.id)) continue;
-        const title = compactTitle(m.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
-        seen.add(m.id);
-        mCount++;
-        scored.push({ score, kind: 1, dup: `m:${title}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
-      }
-    }
-    let sCount = 0;
-    for (const list of Object.values(series)) {
-      for (const sr of list as SeriesItem[]) {
-        if (sCount >= 120 || seen.has(sr.id)) continue;
-        const title = compactTitle(sr.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
-        seen.add(sr.id);
-        sCount++;
-        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
-      }
-    }
-    // Best matches first; channels before movies before series on ties
-    scored.sort((a, b) => b.score - a.score || a.kind - b.kind);
-    // One result per title (and year): the best-ranked copy wins
-    const unique = new Set<string>();
-    return scored.filter((x) => !unique.has(x.dup) && unique.add(x.dup)).map((x) => x.r);
-  }, [q, channels, movies, series, epg, playChannel, setDetail]);
-
+    return {
+      key: (hit.kind === 'movie' ? 'm' : 's') + item.id,
+      type: hit.kind, title: item.name, image: hit.item.poster,
+      subtitle: [hit.kind === 'movie' ? 'Movie' : 'Series', hit.item.year].filter(Boolean).join(' · '),
+      run: () => setDetail(hit.kind === 'movie' ? { kind: 'movie', item: hit.item } : { kind: 'series', item: hit.item }),
+    };
+  }), [hits, epg, playChannel, setDetail]);
   useEffect(() => setIdx(0), [q]);
+  useEffect(() => setIdx((current) => Math.max(0, Math.min(current, results.length - 1))), [results.length]);
   useEffect(() => {
     if (zone === 'results') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 3) * rowH), animated: true });
   }, [idx, zone, rowH]);
@@ -190,7 +198,7 @@ export function SearchScreen() {
         return;
     }
   };
-  useKeys(onKey, !menuFocused && !detail);
+  useKeys(onKey, !menuFocused && !detail && !sheetOpen && !fullscreen);
 
   return (
     <View style={{ flex: 1, padding: tv ? s(22) : 16 }}>
@@ -217,7 +225,7 @@ export function SearchScreen() {
           style={{ flex: 1, color: colors.text, fontSize: k(14), marginLeft: k(8), height: '100%', fontFamily: fonts.regular, outlineStyle: 'none' } as any}
           testID="search-input"
         />
-        {vodAll === 'loading' ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+        {vodAll === 'loading' || searching ? <ActivityIndicator size="small" color={colors.accent} /> : null}
         {canListen ? (
           <Pressable
             focusable={false}
@@ -233,7 +241,7 @@ export function SearchScreen() {
       {listening ? <Text style={{ color: colors.live, fontSize: k(12), marginTop: k(8), fontWeight: '600' }}>Listening… say a channel, movie or show</Text> : null}
       {voiceError ? <Text style={{ color: colors.star, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
 
-      {q.trim().length >= 2 && !results.length ? (
+      {q.trim().length >= 2 && !results.length && !searching && vodAll !== 'loading' ? (
         <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{q.trim()}”.</Text>
       ) : null}
       {q.trim().length < 2 && !listening ? <VoiceHint k={k} canListen={canListen} /> : null}

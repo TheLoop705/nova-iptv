@@ -23,14 +23,21 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
   const triedFallback = useRef(false);
   const pendingSeek = useRef<number | undefined>(undefined);
   const reconnects = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackIds = useRef<{ audio: number[]; subs: number[] }>({ audio: [], subs: [] });
 
   useEffect(() => {
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = null;
     triedFallback.current = false;
     reconnects.current = 0;
     pendingSeek.current = resumeAt;
     setUri(source?.uri);
     set({ status: 'loading', error: undefined, position: 0, duration: 0, audioTracks: [], subtitleTracks: [], audioIndex: -1, subtitleIndex: -1 });
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source?.uri, source?.userAgent, nonce]);
 
@@ -79,6 +86,8 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
       case 'buffering':
         return set({ status: 'loading' });
       case 'playing':
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
         reconnects.current = 0;
         if (pendingSeek.current) {
           const at = pendingSeek.current;
@@ -93,7 +102,11 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
         if (source?.isLive && reconnects.current < MAX_LIVE_RECONNECTS) {
           reconnects.current++;
           set({ status: 'loading' });
-          setTimeout(() => setReload((r) => r + 1), 800);
+          if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+          reconnectTimer.current = setTimeout(() => {
+            reconnectTimer.current = null;
+            setReload((r) => r + 1);
+          }, 800);
           return;
         }
         return set({ status: 'ended' });

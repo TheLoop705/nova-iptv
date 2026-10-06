@@ -1,5 +1,6 @@
 import { createStore, del, get, set } from 'idb-keyval';
-import { diffDoc, type Doc, type DocOp } from '../utils/docPatch';
+import { applyOps, diffDocAsync, type Doc, type DocOp } from '../utils/docPatch';
+import { createCheckpoint } from '../utils/cooperative';
 
 // Where web data lives:
 // - `settings` (playlists, favourites, progress, preferences) and uploaded `m3u:` files: on the
@@ -21,6 +22,33 @@ let server: boolean | undefined;
 let synced: Doc | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 const listeners = new Set<(ops: DocOp[]) => void>();
+let localDoc: Doc | null = null;
+let readLocalDoc: (() => Doc) | undefined;
+interface LocalWrite { from: Doc; to: Doc }
+const pendingWrites = new Set<LocalWrite>();
+const failedOps = new Map<string, DocOp>();
+const opKey = (op: DocOp) => JSON.stringify(op.path);
+const object = (value: unknown): value is Doc => !!value && typeof value === 'object' && !Array.isArray(value);
+const valueAt = (doc: Doc, path: DocOp['path']) => {
+  const field = doc[path[0]];
+  return path.length === 1 ? field : object(field) ? field[path[1]] : undefined;
+};
+const sameAt = (a: Doc, b: Doc, path: DocOp['path']) => {
+  const left = valueAt(a, path), right = valueAt(b, path);
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+};
+
+function withLocalDefaults(doc: Doc): Doc {
+  const defaults = readLocalDoc?.();
+  if (!defaults) return doc;
+  const result = { ...defaults, ...doc };
+  for (const key in defaults) {
+    if (object(defaults[key]) && Object.keys(defaults[key]).length && object(doc[key])) {
+      result[key] = { ...defaults[key], ...doc[key] };
+    }
+  }
+  return result;
+}
 
 async function idbGet<T>(key: string): Promise<T | null> {
   if (!idb) return null;
@@ -34,19 +62,26 @@ async function idbGet<T>(key: string): Promise<T | null> {
 
 async function call<T>(key: string, method: string, body?: unknown): Promise<T | null> {
   const payload = body === undefined ? undefined : JSON.stringify(body);
-  const res = await fetch(API + encodeURIComponent(key), {
-    method,
-    cache: 'no-store',
-    headers: payload === undefined ? undefined : { 'content-type': 'application/json' },
-    body: payload,
-    // lets the save on page unload finish; browsers only allow it for small bodies
-    keepalive: payload !== undefined && payload.length < 60000,
-  });
-  if (!res.ok) throw new Error(`Nova server: ${method} ${key} failed (HTTP ${res.status})`);
-  // A static host answers with index.html here, which fails to parse
-  const data = (await res.json()) as { value?: T | null; ok?: boolean };
-  if (!data || typeof data !== 'object' || !('value' in data || data.ok)) throw new Error('Not a Nova server');
-  return data.value ?? null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(API + encodeURIComponent(key), {
+      method,
+      cache: 'no-store',
+      headers: payload === undefined ? undefined : { 'content-type': 'application/json' },
+      body: payload,
+      // lets the save on page unload finish; browsers only allow it for small bodies
+      keepalive: payload !== undefined && payload.length < 60000,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Nova server: ${method} ${key} failed (HTTP ${res.status})`);
+    // A static host answers with index.html here, which fails to parse
+    const data = (await res.json()) as { value?: T | null; ok?: boolean };
+    if (!data || typeof data !== 'object' || !('value' in data || data.ok)) throw new Error('Not a Nova server');
+    return data.value ?? null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Runs settings syncs one at a time so each diff is against the latest server copy. */
@@ -56,18 +91,56 @@ function enqueue<T>(run: () => Promise<T>): Promise<T> {
   return p;
 }
 
-function emit(ops: DocOp[]) {
-  if (ops.length) listeners.forEach((l) => l(ops));
+async function receive(ops: DocOp[], completed?: LocalWrite) {
+  const checkpoint = createCheckpoint();
+  // Recheck the current UI immediately before each small synchronous batch.
+  // Comparing an old snapshot asynchronously must never erase newer input.
+  for (let start = 0; start < ops.length; start += 64) {
+    const baseline = localDoc ?? {};
+    const current = readLocalDoc?.() ?? baseline;
+    const accepted = ops.slice(start, start + 64).filter((op) => {
+      if (!sameAt(baseline, current, op.path)) return false;
+      for (const write of pendingWrites) {
+        if (write !== completed && !sameAt(write.from, write.to, op.path)) return false;
+      }
+      for (const failed of failedOps.values()) {
+        if (failed.path[0] === op.path[0] && (failed.path.length === 1 || op.path.length === 1 || failed.path[1] === op.path[1])) return false;
+      }
+      return true;
+    });
+    if (accepted.length) {
+      localDoc = applyOps(baseline, accepted);
+      listeners.forEach((listener) => listener(accepted));
+    }
+    const pause = checkpoint();
+    if (pause) await pause;
+  }
 }
 
 /** Saves what changed since the last sync, then hands back what other devices changed meanwhile. */
 function saveDoc(doc: Doc): Promise<void> {
+  // Capture local intent now. Diffing a queued raw snapshot against a newer
+  // server copy would revert remote changes that snapshot had never seen.
+  const write = { from: localDoc ?? synced ?? {}, to: doc };
+  localDoc = doc;
+  pendingWrites.add(write);
   return enqueue(async () => {
-    const ops = diffDoc(synced ?? {}, doc);
-    if (!ops.length) return;
-    const merged = (await call<Doc>(DOC_KEY, 'PATCH', { ops })) ?? {};
-    synced = merged;
-    emit(diffDoc(doc, merged));
+    const retry = new Map(failedOps);
+    try {
+      for (const op of await diffDocAsync(write.from, doc)) retry.set(opKey(op), op);
+      const ops = [...retry.values()];
+      if (!ops.length) return;
+      const merged = (await call<Doc>(DOC_KEY, 'PATCH', { ops })) ?? {};
+      failedOps.clear();
+      synced = merged;
+      await receive(await diffDocAsync(doc, merged), write);
+    } catch (error) {
+      // The next flush must retry these fields even if its snapshot is identical.
+      for (const [key, op] of retry) failedOps.set(key, op);
+      throw error;
+    } finally {
+      pendingWrites.delete(write);
+    }
   });
 }
 
@@ -76,9 +149,9 @@ function pull() {
   if (server !== true || !synced) return;
   enqueue(async () => {
     const doc = (await call<Doc>(DOC_KEY, 'GET')) ?? {};
-    const incoming = diffDoc(synced ?? {}, doc);
+    const incoming = await diffDocAsync(synced ?? {}, doc);
     synced = doc;
-    emit(incoming);
+    await receive(incoming);
   }).catch((e) => console.warn('Settings sync failed', e));
 }
 
@@ -91,7 +164,10 @@ export async function getItem<T>(key: string): Promise<T | null> {
     try {
       const stored = await call<T>(key, 'GET');
       server = true;
-      if (key === DOC_KEY) synced = (stored as Doc | null) ?? {};
+      if (key === DOC_KEY) {
+        synced = (stored as Doc | null) ?? {};
+        localDoc = withLocalDefaults(synced);
+      }
       if (stored !== null) return stored;
       // First load since the server took over: move what this browser saved before
       const mine = await idbGet<T>(key);
@@ -130,8 +206,15 @@ export async function removeItem(key: string): Promise<void> {
 }
 
 /** Changes to `key` made in another tab or on another device, as ops to apply to local state. */
-export function onRemoteChange(key: string, listener: (ops: DocOp[]) => void): () => void {
+export function onRemoteChange(key: string, listener: (ops: DocOp[]) => void, currentDoc?: () => Doc): () => void {
   if (key !== DOC_KEY) return () => {};
+  if (currentDoc) {
+    readLocalDoc = currentDoc;
+    if (localDoc) localDoc = withLocalDefaults(localDoc);
+  }
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+    if (readLocalDoc === currentDoc) readLocalDoc = undefined;
+  };
 }

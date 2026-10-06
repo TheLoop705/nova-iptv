@@ -1,6 +1,7 @@
 import type { Channel, Program } from '../types';
 import { normalizeName } from '../utils/format';
 import type { EpgData } from './xmltv';
+import { createCheckpoint } from '../utils/cooperative';
 
 export function buildEpgIndex(channels: Channel[], epg: EpgData): Record<string, Program[]> {
   const out: Record<string, Program[]> = {};
@@ -25,6 +26,36 @@ export function buildEpgIndex(channels: Channel[], epg: EpgData): Record<string,
       }
     }
     if (key) out[ch.id] = epg.programs[key];
+  }
+  return out;
+}
+
+/** Build large playlist indexes without holding the input/React thread. */
+export async function buildEpgIndexAsync(channels: Channel[], epg: EpgData, signal?: AbortSignal): Promise<Record<string, Program[]>> {
+  const out: Record<string, Program[]> = {};
+  const lowerKeys = new Map<string, string>();
+  const checkpoint = createCheckpoint(signal);
+  for (const key in epg.programs) {
+    lowerKeys.set(key.toLowerCase(), key);
+    const pause = checkpoint();
+    if (pause) await pause;
+  }
+  for (const ch of channels) {
+    let key: string | undefined;
+    if (ch.tvgId) {
+      key = epg.programs[ch.tvgId] ? ch.tvgId : lowerKeys.get(ch.tvgId.toLowerCase());
+      if (!key && ch.tvgId.includes('@')) key = lowerKeys.get(ch.tvgId.split('@')[0].toLowerCase());
+    }
+    if (!key) {
+      for (const name of [ch.tvgName, ch.name]) {
+        if (!name) continue;
+        const id = epg.names[normalizeName(name)];
+        if (id && epg.programs[id]) { key = id; break; }
+      }
+    }
+    if (key) out[ch.id] = epg.programs[key];
+    const pause = checkpoint();
+    if (pause) await pause;
   }
   return out;
 }

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 import type { SeriesItem, VodItem } from '../types';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
@@ -18,12 +18,18 @@ const RECENT = '__recent';
 const FAVS = '__fav';
 
 export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
+  const pid = useLibrary((st) => st.playlistId);
+  return <VodBrowser key={`${pid}:${kind}`} kind={kind} />;
+}
+
+function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   const { s, mode, width } = useLayout();
   const tv = mode === 'tv';
   const pid = useLibrary((st) => st.playlistId);
   const cats = useLibrary((st) => (kind === 'movies' ? st.movieCats : st.seriesCats));
   const byCat = useLibrary((st) => (kind === 'movies' ? st.movies : st.series)) as Record<string, Item[]>;
   const vodStatus = useLibrary((st) => st.vodStatus);
+  const allLoaded = useLibrary((st) => kind === 'movies' ? st.moviesAllLoaded : st.seriesAllLoaded);
   const loadCats = useLibrary((st) => (kind === 'movies' ? st.loadMovieCats : st.loadSeriesCats));
   const loadItems = useLibrary((st) => (kind === 'movies' ? st.loadMovies : st.loadSeries));
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
@@ -37,7 +43,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
 
   useEffect(() => {
     void loadCats();
-  }, [pid, loadCats]);
+  }, [pid, loadCats, cats]);
 
   const favItems = useMemo(() => (favs ?? []).filter((f) => (kind === 'movies' ? f.kind === 'movie' : f.kind === 'series')).map((f) => f.item), [favs, kind]);
   // built-in lists, then favourite categories (starred), then the rest in playlist order
@@ -58,7 +64,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
 
   // default category: first real one
   useEffect(() => {
-    if (selected || !allCats.length) return;
+    if ((selected && allCats.some((c) => c.id === selected)) || !allCats.length) return;
     const first = allCats.findIndex((c) => c.id !== RECENT && c.id !== FAVS);
     const idx = first >= 0 ? first : 0;
     setCatIndex(idx);
@@ -89,11 +95,19 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   }, [catIndex, allCats, selected, tv]);
 
   useEffect(() => {
-    if (selected && selected !== RECENT && selected !== FAVS) void loadItems(selected);
-  }, [selected, loadItems]);
+    if (selected && selected !== RECENT && selected !== FAVS && cats?.some((c) => c.id === selected)) void loadItems(selected);
+  }, [selected, loadItems, cats, pid]);
 
-  const items: Item[] = selected === RECENT ? (recent ?? []) : selected === FAVS ? favItems : selected ? (byCat[selected] ?? []) : [];
-  const loading = !cats || (selected ? vodStatus[(kind === 'movies' ? 'm:' : 's:') + selected] === 'loading' : false);
+  const selectedList = selected ? byCat[selected] : undefined;
+  const items: Item[] = selected === RECENT ? (recent ?? []) : selected === FAVS ? favItems : Array.isArray(selectedList) ? selectedList : [];
+  useEffect(() => { setGi((i) => Math.max(0, Math.min(i, items.length - 1))); }, [items.length]);
+  const categoryError = vodStatus[kind === 'movies' ? 'movieCats' : 'seriesCats'] === 'error';
+  const itemStatus = selected ? vodStatus[(kind === 'movies' ? 'm:' : 's:') + selected] : undefined;
+  const fullFailed = !!selected && selected !== RECENT && selected !== FAVS && !Array.isArray(selectedList) && !allLoaded && vodStatus.all === 'error';
+  const loadError = !items.length && (categoryError || itemStatus === 'error' || fullFailed);
+  const loading = (!cats && !categoryError && !items.length) || itemStatus === 'loading' ||
+    (!!selected && selected !== RECENT && selected !== FAVS && !Array.isArray(selectedList) && !allLoaded && vodStatus.all === 'loading');
+  const retry = () => { if (categoryError) void loadCats(); else if (selected) void loadItems(selected); };
 
   // grid metrics
   const [boxW, setBoxW] = useState(width);
@@ -104,13 +118,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
   const cols = tv ? Math.max(3, Math.floor((gridW + gap) / (s(98) + gap))) : Math.max(3, Math.floor((gridW + gap) / (118 + gap)));
   const posterW = (gridW - gap * (cols - 1)) / cols;
   const rowH = posterW * 1.5 + (tv ? s(46) : 50);
-  const rows = useMemo(() => {
-    const out: Item[][] = [];
-    for (let i = 0; i < items.length; i += cols) out.push(items.slice(i, i + cols));
-    return out;
-  }, [items, cols]);
-
-  const gridRef = useRef<FlatList<Item[]>>(null);
+  const gridRef = useRef<FlatList<Item>>(null);
   const catRef = useRef<FlatList>(null);
   const catH = tv ? s(34) : 0;
 
@@ -168,17 +176,31 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
     });
   };
 
+  // Stable callbacks keep memoized posters from all rerendering on every D-pad press.
+  const actions = useRef({ open, itemSheet });
+  actions.current = { open, itemSheet };
+  const openPoster = useCallback((item: Item, index: number) => {
+    setGi(index);
+    setZone('grid');
+    actions.current.open(item);
+  }, []);
+  const menuPoster = useCallback((item: Item, index: number, anchor?: MenuAnchor) => {
+    setGi(index);
+    actions.current.itemSheet(item, anchor);
+  }, []);
+
   const onKey = (e: KeyEvt): boolean | void => {
     if (zone === 'cats') {
       switch (e.key) {
         case 'up':
           return setCatIndex((i) => Math.max(0, i - 1));
         case 'down':
-          return setCatIndex((i) => Math.min(allCats.length - 1, i + 1));
+          return setCatIndex((i) => Math.min(Math.max(0, allCats.length - 1), i + 1));
         case 'menu':
           return catSheet(allCats[catIndex]);
         case 'right':
         case 'select':
+          if (e.key === 'select' && loadError) return retry();
           if (e.long) return catSheet(allCats[catIndex]);
           if (allCats[catIndex]?.id !== selected) {
             setSelected(allCats[catIndex]?.id);
@@ -199,16 +221,17 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
         if (gi % cols === 0) return setZone('cats');
         return setGi(gi - 1);
       case 'right':
-        return setGi(Math.min(n - 1, gi + 1));
+        return setGi(Math.min(Math.max(0, n - 1), gi + 1));
       case 'up':
         return setGi(gi - cols >= 0 ? gi - cols : gi);
       case 'down':
-        return setGi(Math.min(n - 1, gi + cols < n ? gi + cols : gi));
+        return setGi(Math.min(Math.max(0, n - 1), gi + cols < n ? gi + cols : gi));
       case 'chup':
         return setGi(Math.max(0, gi - cols * 3));
       case 'chdown':
-        return setGi(Math.min(n - 1, gi + cols * 3));
+        return setGi(Math.min(Math.max(0, n - 1), gi + cols * 3));
       case 'select':
+        if (loadError) return retry();
         if (items[gi]) return e.long ? itemSheet(items[gi]) : open(items[gi]);
         return;
       case 'menu':
@@ -273,8 +296,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
             )}
           />
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 8 }}>
-            {allCats.map((c) => (
+          <FlatList horizontal data={allCats} keyExtractor={(c) => c.id} showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 8 }} initialNumToRender={8} windowSize={5} renderItem={({ item: c }) => (
               <Chip
                 key={c.id}
                 label={c.name}
@@ -286,8 +308,7 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
                 }}
                 onLongPress={c.id === RECENT || c.id === FAVS ? undefined : () => catSheet(c)}
               />
-            ))}
-          </ScrollView>
+            )} />
         )}
 
         <View style={{ flex: 1 }}>
@@ -299,47 +320,41 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
               <Icon name={kind === 'movies' ? 'movie-open-off-outline' : 'television-off'} size={tv ? s(36) : 40} color={colors.muted} />
               <Text style={{ color: colors.textDim, fontSize: tv ? s(13) : 15, marginTop: 10, textAlign: 'center' }}>
-                {cats && !cats.length && !allCats.length ? `This playlist has no ${kind}.` : 'Nothing here yet.'}
+                {loadError ? `Couldn't load ${categoryError ? 'categories' : kind}.` : cats && !cats.length && !allCats.length ? `This playlist has no ${kind}.` : 'Nothing here yet.'}
               </Text>
+              {loadError ? <Focusable focused={!menuFocused} onPress={retry} testID={`vod-retry-${kind}`} style={{ marginTop: 14, padding: 12, borderRadius: radius.md, backgroundColor: colors.surface }} focusStyle={{ backgroundColor: colors.focus }}>{({ focused }) => <Text style={{ color: focused ? colors.focusText : colors.text }}>Retry</Text>}</Focusable> : null}
             </View>
           ) : (
             <FlatList
               ref={gridRef}
-              data={rows}
-              keyExtractor={(r, i) => (r[0]?.id ?? '') + i}
+              key={`${pid}:${kind}:${cols}`}
+              data={items}
+              numColumns={cols}
+              columnWrapperStyle={{ gap }}
+              keyExtractor={(it) => it.id}
               contentContainerStyle={{ paddingHorizontal: pad, paddingBottom: tv ? s(40) : 30, paddingTop: tv ? s(6) : 0 }}
               getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
               initialNumToRender={4}
               windowSize={5}
-              renderItem={({ item: r, index: ri }) => (
-                <View style={{ flexDirection: 'row', height: rowH, gap }}>
-                  {r.map((it, ci) => {
-                    const idx = ri * cols + ci;
-                    const prog = kind === 'movies' ? progress[movieKey(it as VodItem)] : undefined;
-                    return (
+              maxToRenderPerBatch={3}
+              renderItem={({ item: it, index: idx }) => {
+                const prog = kind === 'movies' ? progress[movieKey(it as VodItem)] : undefined;
+                return <View style={{ height: rowH }}>
                       <PosterCard
-                        key={it.id}
                         item={it}
+                        index={idx}
+                        testID={`vod-item-${kind}-${it.id}`}
                         width={posterW}
                         focused={zone === 'grid' && gi === idx}
                         progress={prog && prog.dur > 0 ? prog.pos / prog.dur : 0}
                         watched={!!prog?.done}
                         tv={tv}
                         s={s}
-                        onPress={() => {
-                          setGi(idx);
-                          setZone('grid');
-                          open(it);
-                        }}
-                        onMenu={(anchor) => {
-                          setGi(idx);
-                          itemSheet(it, anchor);
-                        }}
+                        onOpen={openPoster}
+                        onMenu={menuPoster}
                       />
-                    );
-                  })}
-                </View>
-              )}
+                </View>;
+              }}
             />
           )}
         </View>
@@ -350,32 +365,37 @@ export function VodScreen({ kind }: { kind: 'movies' | 'series' }) {
 
 const PosterCard = React.memo(function PosterCard({
   item,
+  index,
+  testID,
   width,
   focused,
   progress,
   watched,
   tv,
   s,
-  onPress,
+  onOpen,
   onMenu,
 }: {
   item: Item;
+  index: number;
+  testID: string;
   width: number;
   focused: boolean;
   progress: number;
   watched?: boolean;
-  onMenu?: (anchor?: MenuAnchor) => void;
+  onMenu?: (item: Item, index: number, anchor?: MenuAnchor) => void;
   tv: boolean;
   s: (n: number) => number;
-  onPress: () => void;
+  onOpen: (item: Item, index: number) => void;
 }) {
   const year = 'year' in item ? item.year : undefined;
   return (
     <Focusable
       focused={focused}
-      onPress={onPress}
-      onLongPress={onMenu && (() => onMenu())}
-      onContextMenu={onMenu}
+      onPress={() => onOpen(item, index)}
+      onLongPress={onMenu && (() => onMenu(item, index))}
+      onContextMenu={onMenu && ((anchor) => onMenu(item, index, anchor))}
+      testID={testID}
       accessibilityLabel={item.name}
       style={{ width, borderRadius: radius.md, padding: 0 }}
       hoverStyle={{ transform: [{ scale: 1.03 }] }}

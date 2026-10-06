@@ -228,6 +228,7 @@ const save = () => {
 useSettings.subscribe((s, prev) => {
   if (!s.hydrated || !prev.hydrated) return;
   if (s.activeId !== prev.activeId) setItem('device', { activeId: s.activeId }).catch((e) => console.warn('Failed to save settings', e));
+  if (SHARED.every((key) => s[key] === prev[key])) return;
   if (timer) clearTimeout(timer);
   timer = setTimeout(save, 400);
 });
@@ -254,7 +255,7 @@ onRemoteChange('settings', (ops) => {
   if (!shared.length) return;
   const next = applyOps(sharedDoc(useSettings.getState()), shared) as Partial<Persisted>;
   useSettings.setState({ ...next, prefs: { ...defaultPrefs, ...next.prefs } });
-});
+}, () => sharedDoc(useSettings.getState()));
 
 export const useActivePlaylist = () =>
   useSettings((s) => s.playlists.find((p) => p.id === s.activeId) ?? s.playlists[0]);

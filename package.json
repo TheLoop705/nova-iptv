@@ -33,12 +33,15 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/react": "~19.2.2",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
-    "web": "EXPO_PUBLIC_PROXY_URL=http://localhost:8787 expo start --web",
+    "web": "node scripts/start-web.mjs",
     "proxy": "node server/index.mjs",
     "mock:xtream": "node server/mock-xtream.mjs",
     "build:web": "expo export -p web && node scripts/write-web-version.mjs && node scripts/compress-dist.mjs",
@@ -49,7 +52,16 @@
     "build:windows": "npm --prefix desktop run dist",
     "test:windows": "npm --prefix desktop run smoke",
     "typecheck": "tsc --noEmit",
-    "test:updates": "node --test tests/updates.test.mjs"
+    "test:updates": "node --test tests/updates.test.mjs",
+    "build:perf:web": "node scripts/build-performance-web.mjs",
+    "test:performance": "node --import tsx --test tests/*performance.test.mjs tests/mock-xtream.test.mjs tests/test-env.test.mjs",
+    "test:e2e": "playwright test",
+    "test:provider": "node scripts/provider-smoke.mjs",
+    "test:android:smoke": "node scripts/android-smoke.mjs",
+    "test:android:doctor": "node scripts/android-smoke.mjs --doctor",
+    "mock:stress": "node scripts/start-stress-mock.mjs",
+    "test:perf:windows": "node scripts/test-windows-performance.mjs",
+    "test:ios:smoke": "node scripts/ios-smoke.mjs"
   },
   "private": true
 }

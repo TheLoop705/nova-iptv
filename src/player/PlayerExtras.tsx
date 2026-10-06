@@ -185,6 +185,7 @@ export function SeekBar({ position, duration, active, onSeek }: SeekBarProps) {
 
   return (
     <View
+      testID="player-seekbar"
       style={[{ flex: 1, height: Math.max(k(28), TOUCH_MIN), justifyContent: 'center' }, web ? ({ cursor: duration ? 'pointer' : 'default' } as object) : null]}
       onLayout={(e) => (width.current = e.nativeEvent.layout.width || 1)}
       onStartShouldSetResponder={() => duration > 0}

@@ -34,7 +34,6 @@ export function GuideScreen() {
   const byId = useLibrary((st) => st.byId);
   const epg = useLibrary((st) => st.epg);
   const epgStatus = useLibrary((st) => st.epgStatus);
-  const epgMessage = useLibrary((st) => st.epgMessage);
   const groups = useAllGroups();
   const prefs = useSettings((st) => st.prefs);
   const favorites = useSettings((st) => (pid ? st.favorites[pid] : undefined));
@@ -432,7 +431,9 @@ export function GuideScreen() {
   );
 
   // ---- xtream: fetch per-channel guide for visible rows when there's no XMLTV ----
+  const visibleChannels = useRef<Channel[]>([]);
   const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    visibleChannels.current = viewableItems.map((v) => v.item as Channel);
     const lib = useLibrary.getState();
     if (lib.epgStatus === 'loading') return;
     for (const v of viewableItems) {
@@ -440,6 +441,13 @@ export function GuideScreen() {
       if (!lib.epg[ch.id]) lib.loadShortEpg(ch.id);
     }
   }).current;
+  useEffect(() => {
+    if (epgStatus === 'loading') return;
+    const lib = useLibrary.getState();
+    for (const channel of visibleChannels.current) {
+      if (!lib.epg[channel.id]) void lib.loadShortEpg(channel.id);
+    }
+  }, [epgStatus]);
   const viewConfig = useRef({ itemVisiblePercentThreshold: 20, minimumViewTime: 400 }).current;
 
   // ---- pointer handlers ----
@@ -640,18 +648,27 @@ export function GuideScreen() {
       </View>
       </View>
 
-      {epgStatus === 'loading' ? (
-        <View pointerEvents="none" style={{ position: 'absolute', right: tv ? s(16) : 12, bottom: tv ? s(10) : 10, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface3, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: colors.borderStrong }}>
-          <ActivityIndicator size="small" color={colors.accent} />
-          <Text style={{ color: colors.textDim, fontSize: tv ? s(11) : 12, marginLeft: 8 }}>{epgMessage ?? 'Updating guide…'}</Text>
-        </View>
-      ) : null}
+      <GuideDownloadStatus s={s} tv={tv} />
 
       {digits ? (
         <View pointerEvents="none" style={{ position: 'absolute', top: tv ? s(20) : 20, right: tv ? s(24) : 20, backgroundColor: colors.surface3, borderRadius: radius.lg, paddingHorizontal: 20, paddingVertical: 10, borderWidth: 1, borderColor: colors.borderStrong }}>
           <Text style={{ color: colors.text, fontSize: tv ? s(30) : 30, fontWeight: '800', letterSpacing: 2, fontVariant: ['tabular-nums'] }}>{digits}</Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+// Download progress changes frequently; subscribe here so it doesn't rebuild
+// the guide rows, hero and category column on every progress notification.
+function GuideDownloadStatus({ s, tv }: { s: (n: number) => number; tv: boolean }) {
+  const loading = useLibrary((state) => state.epgStatus === 'loading');
+  const message = useLibrary((state) => state.epgMessage);
+  if (!loading) return null;
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', right: tv ? s(16) : 12, bottom: tv ? s(10) : 10, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface3, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: colors.borderStrong }}>
+      <ActivityIndicator size="small" color={colors.accent} />
+      <Text style={{ color: colors.textDim, fontSize: tv ? s(11) : 12, marginLeft: 8 }}>{message ?? 'Updating guide…'}</Text>
     </View>
   );
 }

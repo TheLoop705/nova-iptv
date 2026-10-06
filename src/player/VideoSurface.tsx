@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, type StyleProp, type ViewStyle } from 'react-native';
 import { isPictureInPictureSupported, useVideoPlayer, VideoView, type VideoSource } from 'expo-video';
 import { useEventListener } from 'expo';
@@ -8,6 +8,7 @@ import { imageUrl } from '../services/http';
 import { guessContentType, preferVlc, usePlayback } from './playback';
 import { VlcSurface } from './VlcSurface';
 import { VlcPlayerView } from '../../modules/vlc-player';
+import { createSourceLoader } from './sourceLoad';
 
 interface Props {
   source: Source | null;
@@ -70,6 +71,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     // Lock screen / Control Center controls on iOS; media session + notification on Android
     p.showNowPlayingNotification = true;
   });
+  const sourceLoader = useMemo(() => createSourceLoader<VideoSource>((next) => player.replaceAsync(next)), [player]);
 
   useEffect(() => {
     set({
@@ -123,18 +125,23 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     hasPlayed.current = false;
     if (!source) {
       player.pause();
-      player.replace(null);
+      pendingSeek.current = undefined;
+      void sourceLoader.load(null, () => {}, () => {});
       set({ status: 'idle', position: 0, duration: 0, error: undefined });
-      return;
+      return () => sourceLoader.cancel();
     }
     pendingSeek.current = resumeAt;
     set({ status: 'loading', error: undefined, position: 0, duration: 0, audioTracks: [], subtitleTracks: [], audioIndex: -1, subtitleIndex: -1 });
     player.playbackRate = 1;
-    player.replace(toVideoSource(source.uri, source), true);
-    player.play();
+    player.pause();
+    void sourceLoader.load(toVideoSource(source.uri, source), () => player.play(), () => {
+      if (onFail) onFail();
+      else set({ status: 'error', error: 'Could not load this stream.' });
+    });
     set({ rate: 1 });
+    return () => sourceLoader.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source?.uri, source?.userAgent, nonce, player]);
+  }, [source?.uri, source?.userAgent, nonce, player, sourceLoader]);
 
   useEventListener(player, 'statusChange', ({ status, error }) => {
     if (status === 'error') {
@@ -146,8 +153,9 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
       }
       if (source?.fallback && !triedFallback.current) {
         triedFallback.current = true;
-        player.replace(toVideoSource(source.fallback, source), true);
-        player.play();
+        void sourceLoader.load(toVideoSource(source.fallback, source), () => player.play(), () => {
+          set({ status: 'error', error: 'Could not load this stream.' });
+        });
         return;
       }
       set({ status: 'error', error: error?.message ?? 'Playback failed' });
@@ -178,7 +186,10 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
 
   useEventListener(player, 'mutedChange', ({ muted }) => set({ muted }));
 
-  useEventListener(player, 'sourceLoad', ({ duration, availableAudioTracks, availableSubtitleTracks }) => {
+  useEventListener(player, 'sourceLoad', ({ videoSource, duration, availableAudioTracks, availableSubtitleTracks }) => {
+    const loadedUri = typeof videoSource === 'string' ? videoSource
+      : videoSource && typeof videoSource === 'object' ? videoSource.uri : undefined;
+    if (!source || (loadedUri !== source.uri && !(triedFallback.current && loadedUri === source.fallback))) return;
     set({
       duration: duration || 0,
       audioTracks: availableAudioTracks.map((t, i) => ({ id: String(i), label: t.label || t.language || `Track ${i + 1}` })),

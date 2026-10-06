@@ -1,6 +1,8 @@
 import { Platform } from 'react-native';
+import { fetch as expoFetch } from 'expo/fetch';
 import { Inflate } from 'pako';
 import { Utf8Decoder } from '../utils/format';
+import { createCheckpoint, throwIfAborted } from '../utils/cooperative';
 
 export const DEFAULT_UA = 'Nova/1.0 (Linux; Android 12) ExoPlayerLib/2.19.1';
 
@@ -38,29 +40,10 @@ export class HttpError extends Error {
   }
 }
 
-interface FetchOpts {
+export interface FetchOpts {
   ua?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-}
-
-async function request(url: string, opts: FetchOpts = {}): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 45000);
-  opts.signal?.addEventListener('abort', () => controller.abort());
-  const headers: Record<string, string> = {};
-  if (!isWeb) headers['User-Agent'] = opts.ua || DEFAULT_UA;
-  try {
-    const res = await fetch(proxify(url, opts.ua || DEFAULT_UA), { headers, signal: controller.signal });
-    if (!res.ok) throw new HttpError(res.status, `HTTP ${res.status} for ${redact(url)}`);
-    return res;
-  } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error(`Request timed out: ${redact(url)}`);
-    if (e instanceof HttpError) throw e;
-    throw new Error(`Network error for ${redact(url)}: ${e?.message ?? e}`);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /** Hide credentials when surfacing URLs in errors. */
@@ -79,7 +62,7 @@ export async function fetchJson<T = any>(url: string, opts?: FetchOpts): Promise
 
 export async function fetchText(url: string, opts?: FetchOpts): Promise<string> {
   const parts: string[] = [];
-  await streamText(url, opts ?? {}, (t) => parts.push(t));
+  await streamText(url, { timeoutMs: 45_000, ...opts }, (t) => { parts.push(t); });
   return parts.join('');
 }
 
@@ -90,48 +73,150 @@ export async function fetchText(url: string, opts?: FetchOpts): Promise<string> 
 export async function streamText(
   url: string,
   opts: FetchOpts,
-  onText: (chunk: string) => void,
+  onText: (chunk: string) => void | Promise<void>,
   onProgress?: (bytes: number) => void
 ): Promise<void> {
-  const res = await request(url, { timeoutMs: 180000, ...opts });
+  throwIfAborted(opts.signal);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, opts.timeoutMs ?? 180000);
+  const cancel = () => controller.abort();
+  opts.signal?.addEventListener('abort', cancel, { once: true });
+  const signal = controller.signal;
+  const checkpoint = createCheckpoint(signal);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let complete = false;
   const decoder = new Utf8Decoder();
   let inflater: Inflate | null = null;
+  let prefix: Uint8Array = new Uint8Array(0);
   let sniffed = false;
   let bytes = 0;
+  let inflated: Uint8Array[] = [];
 
-  const handleBytes = (chunk: Uint8Array, last: boolean) => {
-    if (!sniffed) {
-      sniffed = true;
-      if (chunk.length > 1 && chunk[0] === 0x1f && chunk[1] === 0x8b) {
-        inflater = new Inflate();
-        inflater.onData = (out: Uint8Array) => onText(decoder.decode(out, true));
-      }
-    }
-    if (inflater) {
-      inflater.push(chunk, last);
-      if (inflater.err) throw new Error(`Failed to decompress ${redact(url)}: ${inflater.msg}`);
-    } else {
-      onText(decoder.decode(chunk, !last));
+  const emit = async (text: string) => {
+    // Providers, native transports and gzip may each deliver a complete large
+    // body in one chunk. Keep every parser invocation small on all platforms.
+    for (let i = 0; i < text.length; i += 16_384) {
+      throwIfAborted(signal);
+      await onText(text.slice(i, i + 16_384));
+      const pause = checkpoint();
+      if (pause) await pause;
     }
   };
 
-  const body: any = (res as any).body;
-  if (body && typeof body.getReader === 'function') {
-    const reader = body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.length) {
-        bytes += value.length;
-        onProgress?.(bytes);
-        handleBytes(value, false);
+  const handleBytes = async (input: Uint8Array, last = false) => {
+    let chunk = input;
+    if (!sniffed) {
+      if (prefix.length) {
+        chunk = new Uint8Array(prefix.length + input.length);
+        chunk.set(prefix);
+        chunk.set(input, prefix.length);
+      }
+      // A gzip signature can be split between network reads.
+      if (chunk.length < 2 && !last) {
+        prefix = chunk;
+        return;
+      }
+      prefix = new Uint8Array(0);
+      sniffed = true;
+      if (chunk[0] === 0x1f && chunk[1] === 0x8b) {
+        inflater = new Inflate({ chunkSize: 16_384 });
+        inflater.onData = (out: Uint8Array) => inflated.push(out);
       }
     }
-    if (!sniffed) return;
-    handleBytes(new Uint8Array(0), true);
-  } else {
-    const buf = new Uint8Array(await res.arrayBuffer());
-    onProgress?.(buf.length);
-    handleBytes(buf, true);
+    const step = inflater ? 1_024 : 16_384;
+    for (let offset = 0; offset < chunk.length; offset += step) {
+      throwIfAborted(signal);
+      const part = chunk.subarray(offset, Math.min(chunk.length, offset + step));
+      if (inflater) {
+        inflater.push(part, false);
+        if (inflater.err) throw new Error(`Failed to decompress ${redact(url)}: ${inflater.msg}`);
+        const pending = inflated;
+        inflated = [];
+        for (const out of pending) await emit(decoder.decode(out, true));
+      } else await emit(decoder.decode(part, true));
+      const pause = checkpoint();
+      if (pause) await pause;
+    }
+    if (last) {
+      if (inflater) {
+        inflater.push(new Uint8Array(0), true);
+        if (inflater.err || !inflater.ended) throw new Error(`Failed to decompress ${redact(url)}: ${inflater.msg || 'Incomplete gzip stream'}`);
+        for (const out of inflated) await emit(decoder.decode(out, true));
+        inflated = [];
+      }
+      await emit(decoder.decode(new Uint8Array(0), false));
+    }
+  };
+
+  // Older transports may not reject a pending read on abort. Use a listener
+  // scoped to each operation; racing every read against one pending Promise
+  // retains all its reaction closures for the entire large-guide transfer.
+  const waitFor = <T,>(operation: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => {
+      const error = new Error('Operation cancelled');
+      error.name = 'AbortError';
+      reject(error);
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+    // Observe the operation even if it was already aborted, so a late native
+    // rejection cannot become an unhandled rejection after cancellation.
+    operation.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+    if (signal.aborted) onAbort();
+  });
+  try {
+    const headers: Record<string, string> = {};
+    if (!isWeb) headers['User-Agent'] = opts.ua || DEFAULT_UA;
+    // React Native's global fetch buffers the body; Expo exposes a true stream.
+    const transport = isWeb ? globalThis.fetch : expoFetch;
+    const res = await waitFor(transport(proxify(url, opts.ua || DEFAULT_UA), { headers, signal }));
+    if (!res.ok) throw new HttpError(res.status, `HTTP ${res.status} for ${redact(url)}`);
+    const body = res.body;
+    if (body && typeof body.getReader === 'function') {
+      reader = body.getReader();
+      while (true) {
+        const { done, value } = await waitFor(reader.read());
+        if (done) break;
+        if (value?.length) {
+          bytes += value.length;
+          onProgress?.(bytes);
+          await handleBytes(value);
+        }
+      }
+    } else {
+      const buf = new Uint8Array(await waitFor(res.arrayBuffer()));
+      bytes = buf.length;
+      onProgress?.(bytes);
+      await handleBytes(buf);
+    }
+    await handleBytes(new Uint8Array(0), true);
+    throwIfAborted(signal);
+    complete = true;
+  } catch (e: any) {
+    if (timedOut) throw new Error(`Request timed out: ${redact(url)}`);
+    if (opts.signal?.aborted || e?.name === 'AbortError') {
+      const error = new Error('Operation cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', cancel);
+    if (!complete) {
+      controller.abort();
+      void reader?.cancel().catch(() => {});
+    }
+    try { reader?.releaseLock(); } catch { /* a cancelled pending read owns the lock until it settles */ }
   }
 }

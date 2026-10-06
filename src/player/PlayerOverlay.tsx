@@ -507,7 +507,7 @@ export function PlayerOverlay() {
           {/* top bar */}
           <LinearGradient colors={['rgba(0,0,0,0.75)', 'transparent']} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: k(110) }} pointerEvents="none" />
           <View style={{ position: 'absolute', left: k(18) + edgeX, right: k(18) + edgeX, top: k(14) + Math.max(ins.top, safe.y), flexDirection: 'row', alignItems: 'center' }}>
-            <Pressable focusable={false} onPress={exit} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={{ marginRight: k(10), width: tv ? k(42) : 52, height: tv ? k(42) : 52, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.glass }}>
+            <Pressable testID="player-back" focusable={false} onPress={exit} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" style={{ marginRight: k(10), width: tv ? k(42) : 52, height: tv ? k(42) : 52, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.glass }}>
               <Icon name="arrow-left" size={k(28)} color={colors.onVideo} />
             </Pressable>
             <View style={{ flex: 1 }} />
@@ -563,7 +563,7 @@ export function PlayerOverlay() {
               </>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(12) }}>
-                <Text style={{ color: colors.text, fontSize: k(14), width: k(72) }}>{formatDuration(position)}</Text>
+                <Text testID="player-position" style={{ color: colors.text, fontSize: k(14), width: k(72) }}>{formatDuration(position)}</Text>
                 <SeekBar position={position} duration={seekDuration} active={row === 'seek' && visible} onSeek={(sec) => (cmd.seekTo(sec), poke())} />
                 <Text style={{ color: colors.textDim, fontSize: k(14), width: k(72), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
               </View>
@@ -574,6 +574,7 @@ export function PlayerOverlay() {
                 const pill = (
                   <Focusable
                     key={c.id}
+                    testID={`player-control-${c.id}`}
                     focused={row === 'controls' && i === ctrl}
                     onPress={() => {
                       setCtrl(i);

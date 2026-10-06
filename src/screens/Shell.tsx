@@ -97,7 +97,7 @@ export function Shell() {
     Layer.panel
   );
 
-  const content = <Content screen={screen} />;
+  const content = <View testID={`screen-${screen}`} style={{ flex: 1 }}><Content screen={screen} /></View>;
 
   if (!tv) {
     return (
@@ -221,7 +221,7 @@ function RailHint({ label, shortcut }: { label: string; shortcut?: string }) {
 function Content({ screen }: { screen: Screen }) {
   const status = useLibrary((st) => st.status);
   const hasChannels = useLibrary((st) => st.channels.length > 0);
-  if (!hasChannels && (status === 'loading' || status === 'idle')) return <Loading />;
+  if (!hasChannels && (status === 'loading' || status === 'idle') && screen !== 'settings') return <Loading />;
   if (!hasChannels && status === 'error' && screen !== 'settings') return <LoadError />;
   switch (screen) {
     case 'home':

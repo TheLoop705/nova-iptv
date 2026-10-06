@@ -72,6 +72,8 @@ function useLiveRecovery(item: ReturnType<typeof usePlayer.getState>['item']) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
     attempts.current = 0;
     playedOnce.current = false;
     loadingSince.current = 0;
@@ -83,6 +85,8 @@ function useLiveRecovery(item: ReturnType<typeof usePlayer.getState>['item']) {
       if (usePlayer.getState().item?.kind !== 'live') return;
       if (st.status === 'loading' && prev.status !== 'loading') loadingSince.current = Date.now();
       if (st.status === 'playing' && prev.status !== 'playing') {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = null;
         attempts.current = 0;
         playedOnce.current = true;
         if (st.reconnect) st.set({ reconnect: 0 });
@@ -92,7 +96,11 @@ function useLiveRecovery(item: ReturnType<typeof usePlayer.getState>['item']) {
           const n = ++attempts.current;
           st.set({ status: 'loading', error: undefined, reconnect: n });
           if (timer.current) clearTimeout(timer.current);
-          timer.current = setTimeout(() => usePlayer.getState().retry(), RECONNECT_DELAYS[n - 1]);
+          const target = usePlayer.getState().item;
+          timer.current = setTimeout(() => {
+            timer.current = null;
+            if (usePlayer.getState().item === target) usePlayer.getState().retry();
+          }, RECONNECT_DELAYS[n - 1]);
         } else if (st.reconnect) {
           st.set({ reconnect: 0 }); // gave up: the error screen takes over
         }

@@ -8,7 +8,7 @@ import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
 import { useUI, type MenuAnchor } from '../store/ui';
 import { useSettings } from '../store/settings';
-import { useLibrary } from '../store/library';
+import { getLibraryGeneration, useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
 import { Layer, useKeys } from '../input/keys';
 import { Poster } from '../components/Logo';
@@ -22,11 +22,13 @@ import { formatDuration } from '../utils/format';
 /** Movie / series detail pages, shown over whichever screen opened them. */
 export function DetailHost() {
   const detail = useUI((s) => s.detail);
+  const pid = useLibrary((s) => s.playlistId);
+  const generation = useLibrary(() => getLibraryGeneration());
   const playing = usePlayer((s) => !!s.item && s.fullscreen);
   if (!detail) return null;
   return (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]}>
-      {detail.kind === 'movie' ? <MovieDetail item={detail.item} active={!playing} /> : <SeriesDetail item={detail.item} active={!playing} />}
+      {detail.kind === 'movie' ? <MovieDetail key={`${pid}:${generation}:movie:${detail.item.id}`} item={detail.item} active={!playing} /> : <SeriesDetail key={`${pid}:${generation}:series:${detail.item.id}`} item={detail.item} active={!playing} />}
     </View>
   );
 }
@@ -169,7 +171,9 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const setWatched = useSettings((st) => st.setWatched);
   const openSheet = useUI((st) => st.openSheet);
   const listRef = useRef<FlatList>(null);
+  const seasonRef = useRef<FlatList>(null);
   const epH = tv ? s(62) : 76;
+  const seasonH = tv ? s(34) : 0;
 
   useEffect(() => {
     let alive = true;
@@ -206,8 +210,14 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   };
 
   useEffect(() => {
+    setEp((i) => Math.min(i, Math.max(0, episodes.length - 1)));
+  }, [season, episodes.length]);
+  useEffect(() => {
     listRef.current?.scrollToOffset({ offset: Math.max(0, (ep - 2) * epH), animated: true });
   }, [ep, epH]);
+  useEffect(() => {
+    if (tv) seasonRef.current?.scrollToOffset({ offset: Math.max(0, (season - 3) * seasonH), animated: true });
+  }, [season, seasonH, tv]);
 
   useKeys(
     (e) => {
@@ -221,8 +231,8 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
         return;
       }
       if (zone === 'seasons') {
-        if (e.key === 'up') return season > 0 ? setSeason(season - 1) : setZone('fav');
-        if (e.key === 'down') return setSeason(Math.min(seasons.length - 1, season + 1));
+        if (e.key === 'up') { setEp(0); return season > 0 ? setSeason(season - 1) : setZone('fav'); }
+        if (e.key === 'down') { setEp(0); return setSeason(Math.min(seasons.length - 1, season + 1)); }
         if (e.key === 'right' || e.key === 'select') {
           setEp(0);
           return setZone('episodes');
@@ -232,7 +242,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       }
       // episodes
       if (e.key === 'up') return ep > 0 ? setEp(ep - 1) : setZone('fav');
-      if (e.key === 'down') return setEp(Math.min(episodes.length - 1, ep + 1));
+      if (e.key === 'down') return setEp(Math.min(Math.max(0, episodes.length - 1), ep + 1));
       if (e.key === 'left') return tv ? setZone('seasons') : undefined;
       if (e.key === 'select' && episodes[ep]) return e.long ? episodeSheet(episodes[ep]) : playEpisode(item, episodes[ep]);
       if (e.key === 'menu' && episodes[ep]) return episodeSheet(episodes[ep]);
@@ -274,7 +284,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
         <View style={{ flex: 1, flexDirection: tv ? 'row' : 'column', paddingHorizontal: tv ? s(28) : 0 }}>
           {tv ? (
             <View style={{ width: s(170) }}>
-              {seasons.map((se, i) => (
+              <FlatList ref={seasonRef} data={seasons} keyExtractor={(se) => String(se.season)} getItemLayout={(_d, i) => ({ length: seasonH, offset: seasonH * i, index: i })} initialNumToRender={10} windowSize={5} renderItem={({ item: se, index: i }) => (
                 <Focusable
                   key={se.season}
                   focused={zone === 'seasons' && i === season}
@@ -291,11 +301,10 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     </Text>
                   )}
                 </Focusable>
-              ))}
+              )} />
             </View>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }}>
-              {seasons.map((se, i) => (
+            <FlatList horizontal data={seasons} keyExtractor={(se) => String(se.season)} showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }} initialNumToRender={8} windowSize={5} renderItem={({ item: se, index: i }) => (
                 <Chip
                   key={se.season}
                   label={se.name}
@@ -305,8 +314,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     setEp(0);
                   }}
                 />
-              ))}
-            </ScrollView>
+              )} />
           )}
           <FlatList
             ref={listRef}
@@ -314,6 +322,9 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
             data={episodes}
             keyExtractor={(e) => e.id}
             contentContainerStyle={{ paddingHorizontal: tv ? s(10) : 16, paddingBottom: 30 }}
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            windowSize={5}
             getItemLayout={(_d, i) => ({ length: epH, offset: epH * i, index: i })}
             renderItem={({ item: e, index: i }) => {
               const pr = progress[episodeKey(e)];

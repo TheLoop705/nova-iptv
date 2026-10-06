@@ -59,6 +59,7 @@ export async function startDesktop({ show = true, dist = app.isPackaged ? join(r
         headers,
         body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer(),
         redirect: 'error',
+        signal: request.signal,
       });
       const outgoing = new Headers(response.headers);
       outgoing.set('Content-Security-Policy', [

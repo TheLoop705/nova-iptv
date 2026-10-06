@@ -89,6 +89,8 @@ npm run mock:xtream    # optional: fake Xtream panel on :8790
 
 Checks: `npx tsc --noEmit`, `npm run test:updates` (Node 22.18+), and, after Android prebuild, `cd android && ./gradlew :playlist-pairing:testDebugUnitTest`. The pairing tests exercise real HTTP requests for M3U/Xtream submission, validation, single-use codes, expiration, and editor-close cancellation.
 
+Performance checks: `npm run test:performance` exercises large guides, catalogs, search, cancellation and caches. `npm run build:perf:web && npm run test:e2e` tests the production web app with a large local provider, real remote navigation and measured responsiveness. [Testing instructions](docs/performance-testing.md) cover private `.env` credentials, Windows, Android TV emulation and physical Fire TV checks. [Performance review](docs/performance-review.md) records the findings, measurements and remaining device coverage.
+
 Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` or Ctrl+K / ⌘K = search, right-click = context menu, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture, `+`/`-` volume.
 
 ## Android TV / Fire TV APK
@@ -197,5 +199,6 @@ Proxy safety:
 
 ## Notes
 
-- Guide data is cached (IndexedDB on web, JSON files in the app's documents directory on native) and refreshed every 12 h by default (Settings → TV Guide).
+- Guide data is cached in small pages (IndexedDB on web, JSON files in the app's documents directory on native) and refreshed every 12 h by default (Settings → TV Guide). Native installations refresh the previous large cache once after this upgrade to avoid blocking while reading it.
+- Settings displays exact movie/series totals after those catalogs have loaded. Choose **Count movies and series** to calculate them in the background; simply opening Settings does not download both catalogs.
 - The default User-Agent is `Nova/1.0 … ExoPlayerLib/2.19.1`. Some providers require a specific one: set it per playlist or globally in Settings.
