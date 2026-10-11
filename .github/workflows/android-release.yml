@@ -58,13 +58,14 @@ jobs:
         with:
           cache-provider: basic
 
-      - name: Test playlist pairing
+      - name: Test native modules
         working-directory: android
         env:
           NODE_ENV: production
         run: >-
           ./gradlew --no-daemon --parallel --build-cache
           :playlist-pairing:testDebugUnitTest
+          :display-mode:testDebugUnitTest
           -PreactNativeArchitectures=armeabi-v7a
 
   release:

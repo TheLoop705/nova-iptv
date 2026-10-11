@@ -109,6 +109,35 @@ export const usePlayback = create<PlaybackState>((set) => ({
   set: (p) => set(p),
 }));
 
+export type BufferMode = 'fast' | 'balanced' | 'smooth';
+
+/**
+ * Settings → Playback → Buffer, translated for each engine. More buffer means a slower start but
+ * fewer stalls on shaky connections and bursty IPTV servers.
+ */
+export interface BufferProfile {
+  /** seconds buffered before playback starts */
+  start: number;
+  /** seconds to refill after each further stall of the same stream (the last value repeats); stays
+   *  below the 20 s stall watchdog in VideoLayer, which reconnects instead */
+  refill: number[];
+  /** seconds to keep buffered ahead */
+  ahead: number;
+  /** libVLC network-caching for live streams, in ms (iOS) */
+  vlcLive: number;
+  /** hls.js: start this many segments behind the live edge */
+  hlsLiveSegments: number;
+}
+
+export const BUFFER_PROFILES: Record<BufferMode, BufferProfile> = {
+  fast: { start: 1, refill: [2, 4], ahead: 20, vlcLive: 1500, hlsLiveSegments: 2 },
+  balanced: { start: 2, refill: [4, 8], ahead: 30, vlcLive: 3000, hlsLiveSegments: 3 },
+  smooth: { start: 4, refill: [8, 12], ahead: 60, vlcLive: 6000, hlsLiveSegments: 4 },
+};
+
+/** Seconds the player waits for after the n-th stall of the same stream (n ≥ 1). */
+export const refillAfterStall = (p: BufferProfile, stalls: number) => p.refill[Math.min(stalls, p.refill.length) - 1] ?? p.start;
+
 export function guessContentType(uri: string): 'hls' | 'dash' | 'progressive' | 'auto' {
   const u = uri.toLowerCase().split('#')[0];
   const path = u.split('?')[0];

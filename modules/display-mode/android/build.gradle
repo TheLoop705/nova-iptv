@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.displaymode'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.displaymode"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // The player itself comes from expo-video; this module only listens to it
+  compileOnly "androidx.media3:media3-exoplayer:1.9.0"
+  compileOnly "androidx.media3:media3-ui:1.9.0"
+  testImplementation 'junit:junit:4.13.2'
+}

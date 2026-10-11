@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { VlcPlayerView, type VlcPlayerRef, type VlcStatus } from '../../modules/vlc-player';
 import type { Source } from '../store/player';
-import { usePlayback } from './playback';
+import { BUFFER_PROFILES, usePlayback } from './playback';
+import { useSettings } from '../store/settings';
 
 interface Props {
   source: Source | null;
@@ -17,6 +18,8 @@ const MAX_LIVE_RECONNECTS = 3;
 export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
   const fit = usePlayback((s) => s.fit);
   const set = usePlayback((s) => s.set);
+  const bufferMode = useSettings((s) => s.prefs.liveBuffer ?? 'balanced');
+  const profile = BUFFER_PROFILES[bufferMode] ?? BUFFER_PROFILES.balanced;
   const ref = useRef<VlcPlayerRef>(null);
   const [uri, setUri] = useState(source?.uri);
   const [reload, setReload] = useState(0);
@@ -113,7 +116,16 @@ export function VlcSurface({ source, nonce, resumeAt, style }: Props) {
       ref={ref}
       style={style}
       fit={fit}
-      source={{ uri, userAgent: source.userAgent, isLive: source.isLive, nonce: nonce * 1000 + reload, title: source.title, subtitle: source.subtitle }}
+      source={{
+        uri,
+        userAgent: source.userAgent,
+        isLive: source.isLive,
+        // files over HTTP get at least 3 s; live streams follow Settings → Buffer
+        networkCaching: source.isLive ? profile.vlcLive : Math.max(3000, profile.vlcLive),
+        nonce: nonce * 1000 + reload,
+        title: source.title,
+        subtitle: source.subtitle,
+      }}
       onStatus={(e) => onStatus(e.nativeEvent.status, e.nativeEvent.error)}
       onProgress={(e) => set({ position: e.nativeEvent.position, duration: e.nativeEvent.duration })}
       onTracks={(e) => {

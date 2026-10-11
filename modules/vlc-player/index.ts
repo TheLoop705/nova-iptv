@@ -13,6 +13,8 @@ export interface VlcSource {
   uri: string;
   userAgent?: string;
   isLive?: boolean;
+  /** libVLC network-caching in ms (how much it buffers before playing) */
+  networkCaching?: number;
   /** change to force a reload of the same uri */
   nonce?: number;
   /** lock screen / Control Center metadata */

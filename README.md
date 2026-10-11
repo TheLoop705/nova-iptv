@@ -65,6 +65,12 @@ Each platform follows its own conventions:
 
 Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, a **Next episode** button during the credits (OK plays it on TV), an "Up next" countdown at the very end, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
 
+Smooth playback:
+
+- **Settings → Playback → Buffer** (*Fast start*, *Balanced*, *Smooth*) sets how much every engine buffers before it starts. After a stall, the player waits until the buffer has refilled (4 s, then 8 s on *Balanced*) instead of resuming with a fraction of a second and stuttering on. Each new channel starts with the normal amount again.
+- **Match frame rate** (Android TV / Fire TV, on by default): while something plays fullscreen, Nova measures the video's frame rate and switches the TV to a matching refresh rate at the same resolution: 50 Hz for 25/50 fps European TV, 23.976/24 Hz for films. It stops the judder you see when those play at 60 Hz. The TV only switches when its current rate doesn't fit, and goes back when playback stops. On Fire TV, also turn on *Settings → Display & Sounds → Display → Match original frame rate*.
+- Web: raw MPEG-TS streams play through mpegts.js without latency chasing (which used to skip ahead and leave half a second of buffer), and HLS rides out live playlist hiccups (6 retries) instead of restarting the stream.
+
 ## Layout
 
 | Path | What it is |
@@ -75,6 +81,7 @@ Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), r
 | `src/input/` | Key router: web keyboard, Android remote, Back button → one focus model |
 | `src/store/` | zustand stores: settings (persisted), library (channels/EPG/VOD), player, UI |
 | `modules/remote-keys/` | Local Expo module (Kotlin) that captures D-pad/media keys on Android TV before Android's native focus system |
+| `modules/display-mode/` | Local Expo module (Kotlin): measures the playing video's frame rate and switches the TV's refresh rate to match |
 | `plugins/withAndroidTV.js` | Config plugin: leanback launcher, TV banner, no touchscreen requirement |
 | `server/index.mjs` | Web server: serves the web build and the `/api/proxy` stream/CORS proxy |
 | `server/mock-xtream.mjs` | Dev-only fake Xtream panel (user `demo` / pass `demo`) |
@@ -89,7 +96,7 @@ npm run web            # terminal 2: Expo web on :8081 (uses the proxy)
 npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
 
-Checks: `npx tsc --noEmit`, `npm run test:updates` (Node 22.18+), and, after Android prebuild, `cd android && ./gradlew :playlist-pairing:testDebugUnitTest`. The pairing tests exercise real HTTP requests for M3U/Xtream submission, validation, single-use codes, expiration, and editor-close cancellation.
+Checks: `npx tsc --noEmit`, `npm run test:updates` (Node 22.18+), and, after Android prebuild, `cd android && ./gradlew :playlist-pairing:testDebugUnitTest :display-mode:testDebugUnitTest`. The pairing tests exercise real HTTP requests for M3U/Xtream submission, validation, single-use codes, expiration, and editor-close cancellation. The display-mode tests cover frame-rate measurement from frame timestamps and the choice of refresh rate.
 
 Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` or Ctrl+K / ⌘K = search, right-click = context menu, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture, `+`/`-` volume.
 

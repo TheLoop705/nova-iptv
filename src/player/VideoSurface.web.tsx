@@ -3,8 +3,9 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
 import type { Source } from '../store/player';
+import { useSettings } from '../store/settings';
 import { proxify } from '../services/http';
-import { guessContentType, usePlayback } from './playback';
+import { BUFFER_PROFILES, guessContentType, refillAfterStall, usePlayback, type BufferProfile } from './playback';
 
 interface Props {
   source: Source | null;
@@ -28,6 +29,31 @@ function enginesFor(uri: string, video: HTMLVideoElement): Engine[] {
   return [...ts, ...hls, 'native'];
 }
 
+/** Seconds of media buffered ahead of the playhead. */
+function bufferedAhead(v: HTMLVideoElement): number {
+  const t = v.currentTime;
+  for (let i = 0; i < v.buffered.length; i++) {
+    if (v.buffered.start(i) <= t + 0.3 && v.buffered.end(i) > t) return v.buffered.end(i) - t;
+  }
+  return 0;
+}
+
+// Live playlists from IPTV panels hiccup (a 404 or a slow reload) far more often than VOD CDNs;
+// ride those out from the buffer instead of tearing the stream down after two failures.
+const retry = (maxNumRetry: number) => ({ maxNumRetry, retryDelayMs: 1000, maxRetryDelayMs: 8000 });
+const hlsConfig = (p: BufferProfile): Partial<ConstructorParameters<typeof Hls>[0]> => ({
+  enableWorker: true,
+  backBufferLength: 30,
+  maxBufferLength: p.ahead,
+  liveSyncDurationCount: p.hlsLiveSegments,
+  // start multi-bitrate streams near HD instead of at the lowest rendition and stepping up
+  abrEwmaDefaultEstimate: 4_000_000,
+  // an unplayable URL fails fast so the next engine / format can be tried
+  manifestLoadPolicy: { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: retry(1), errorRetry: retry(1) } },
+  playlistLoadPolicy: { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: retry(4), errorRetry: retry(6) } },
+  fragLoadPolicy: { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 120000, timeoutRetry: retry(4), errorRetry: retry(6) } },
+});
+
 // The volume is remembered per browser (TVs and phones use their own volume keys)
 const VOLUME_KEY = 'nova.volume';
 function savedVolume(): number {
@@ -46,6 +72,18 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const tsRef = useRef<mpegts.Player | null>(null);
+  const bufferMode = useSettings((s) => s.prefs.liveBuffer ?? 'balanced');
+  const profile = BUFFER_PROFILES[bufferMode] ?? BUFFER_PROFILES.balanced;
+  // Live stall handling: the element resumes as soon as a few frames arrive, which turns one network
+  // hiccup into a stop-start loop. Instead it's held paused until the buffer has refilled.
+  const live = useRef({ isLive: false, played: false, stalls: 0, holding: false, timer: 0 as ReturnType<typeof setInterval> | 0, profile });
+  live.current.profile = profile;
+  const endHold = () => {
+    const l = live.current;
+    if (l.timer) clearInterval(l.timer);
+    l.timer = 0;
+    l.holding = false;
+  };
 
   // commands
   useEffect(() => {
@@ -63,12 +101,20 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         fullscreen: !!doc?.fullscreenEnabled,
       },
       cmd: {
-        play: () => void videoRef.current?.play().catch(() => {}),
-        pause: () => videoRef.current?.pause(),
+        play: () => {
+          endHold();
+          void videoRef.current?.play().catch(() => {});
+        },
+        pause: () => {
+          endHold();
+          videoRef.current?.pause();
+        },
         seekTo: (sec) => {
+          endHold();
           if (videoRef.current) videoRef.current.currentTime = Math.max(0, sec);
         },
         seekBy: (sec) => {
+          endHold();
           const v = videoRef.current;
           if (v) v.currentTime = Math.max(0, Math.min((v.duration || Infinity) - 1, v.currentTime + sec));
         },
@@ -138,10 +184,33 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
       v.addEventListener(ev, fn);
       return () => v.removeEventListener(ev, fn);
     };
+    const refill = () => {
+      const l = live.current;
+      if (!l.isLive || !l.played || l.holding || v.paused || v.seeking) return;
+      l.stalls++;
+      l.holding = true;
+      const need = refillAfterStall(l.profile, l.stalls);
+      const since = Date.now();
+      v.pause();
+      l.timer = setInterval(() => {
+        const ahead = bufferedAhead(v);
+        // give up waiting for the full amount on a slow line: better some video than none
+        if (ahead >= need || (Date.now() - since > 10000 && ahead > 0.5)) {
+          endHold();
+          void v.play().catch(() => {});
+        }
+      }, 250);
+    };
     const offs = [
-      on('waiting', () => usePlayback.getState().status !== 'error' && set({ status: 'loading' })),
-      on('playing', () => set({ status: 'playing', error: undefined })),
-      on('pause', () => usePlayback.getState().status !== 'error' && set({ status: 'paused' })),
+      on('waiting', () => {
+        if (usePlayback.getState().status !== 'error') set({ status: 'loading' });
+        refill();
+      }),
+      on('playing', () => {
+        live.current.played = true;
+        set({ status: 'playing', error: undefined });
+      }),
+      on('pause', () => usePlayback.getState().status !== 'error' && set({ status: live.current.holding ? 'loading' : 'paused' })),
       on('ended', () => set({ status: 'ended' })),
       on('timeupdate', () => {
         const st = usePlayback.getState().status;
@@ -155,7 +224,10 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
       on('enterpictureinpicture', () => set({ pip: true })),
       on('leavepictureinpicture', () => set({ pip: false })),
     ];
-    return () => offs.forEach((f) => f());
+    return () => {
+      endHold();
+      offs.forEach((f) => f());
+    };
   }, [set]);
 
   useEffect(() => {
@@ -182,6 +254,8 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
     };
 
     teardown();
+    endHold();
+    Object.assign(live.current, { isLive: !!source?.isLive, played: false, stalls: 0 });
     if (!source) {
       set({ status: 'idle', position: 0, duration: 0, error: undefined });
       return;
@@ -238,14 +312,7 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
       const url = proxify(uri, source.userAgent);
 
       if (engine === 'hls') {
-        const hls = new Hls({
-          enableWorker: true,
-          backBufferLength: 30,
-          liveSyncDurationCount: 3,
-          manifestLoadingMaxRetry: 1,
-          levelLoadingMaxRetry: 2,
-          fragLoadingMaxRetry: 3,
-        });
+        const hls = new Hls(hlsConfig(profile));
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           // Quality menu: one entry per resolution, best first ("Auto" = ABR)
@@ -291,8 +358,11 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         hls.attachMedia(video);
       } else if (engine === 'mpegts') {
         const player = mpegts.createPlayer(
-          { type: 'mpegts', isLive: source.isLive, url },
-          { enableWorker: true, lazyLoad: false, liveBufferLatencyChasing: source.isLive, autoCleanupSourceBuffer: true }
+          // mpegts.js fetches from a Web Worker, where the same-origin "/api/proxy?…" path has no base to resolve against
+          { type: 'mpegts', isLive: source.isLive, url: new URL(url, location.href).href },
+          // No latency chasing: it skipped ahead whenever more than 1.5 s was buffered, which showed as
+          // jumps and left too little buffer to ride out the next hiccup
+          { enableWorker: true, lazyLoad: false, liveBufferLatencyChasing: false, autoCleanupSourceBuffer: true }
         );
         tsRef.current = player;
         let gotData = false;

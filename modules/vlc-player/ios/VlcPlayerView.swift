@@ -90,8 +90,9 @@ final class VlcPlayerView: ExpoView, VLCMediaPlayerDelegate {
     configureAudioSession()
 
     let media = VLCMedia(url: url)
+    let caching = (source["networkCaching"] as? NSNumber)?.intValue ?? 3000
     var options: [String: Any] = [
-      "network-caching": isLive ? 2000 : 3000,
+      "network-caching": min(max(caching, 500), 20000),
       "http-reconnect": true,
     ]
     if let ua = source["userAgent"] as? String, !ua.isEmpty {

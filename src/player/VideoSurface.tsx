@@ -5,7 +5,7 @@ import { useEventListener } from 'expo';
 import { usePlayer, type Source } from '../store/player';
 import { useSettings } from '../store/settings';
 import { imageUrl } from '../services/http';
-import { guessContentType, preferVlc, usePlayback } from './playback';
+import { BUFFER_PROFILES, guessContentType, preferVlc, refillAfterStall, usePlayback } from './playback';
 import { VlcSurface } from './VlcSurface';
 import { VlcPlayerView } from '../../modules/vlc-player';
 
@@ -62,11 +62,14 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
   // ExoPlayer reports "ended" for a fresh player with nothing loaded yet; only trust
   // playToEnd once the current source has actually played.
   const hasPlayed = useRef(false);
+  const bufferMode = useSettings((s) => s.prefs.liveBuffer ?? 'balanced');
+  const profile = BUFFER_PROFILES[bufferMode] ?? BUFFER_PROFILES.balanced;
+  const stalls = useRef(0);
+  const seekedAt = useRef(0);
 
   const player = useVideoPlayer(null, (p) => {
     p.timeUpdateEventInterval = 1;
     p.keepScreenOnWhilePlaying = true;
-    p.bufferOptions = { preferredForwardBufferDuration: 20, minBufferForPlayback: 1.5 };
     // Lock screen / Control Center controls on iOS; media session + notification on Android
     p.showNowPlayingNotification = true;
   });
@@ -83,9 +86,13 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
         play: () => player.play(),
         pause: () => player.pause(),
         seekTo: (sec) => {
+          seekedAt.current = Date.now();
           player.currentTime = Math.max(0, sec);
         },
-        seekBy: (sec) => player.seekBy(sec),
+        seekBy: (sec) => {
+          seekedAt.current = Date.now();
+          player.seekBy(sec);
+        },
         setAudio: (i) => {
           const t = player.availableAudioTracks[i];
           if (t) player.audioTrack = t;
@@ -121,6 +128,7 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
   useEffect(() => {
     triedFallback.current = false;
     hasPlayed.current = false;
+    stalls.current = 0;
     if (!source) {
       player.pause();
       player.replace(null);
@@ -130,6 +138,8 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
     pendingSeek.current = resumeAt;
     set({ status: 'loading', error: undefined, position: 0, duration: 0, audioTracks: [], subtitleTracks: [], audioIndex: -1, subtitleIndex: -1 });
     player.playbackRate = 1;
+    // minBufferForPlayback is Android-only (ExoPlayer); iOS' AVPlayer decides when to resume by itself
+    player.bufferOptions = { preferredForwardBufferDuration: profile.ahead, minBufferForPlayback: profile.start };
     player.replace(toVideoSource(source.uri, source), true);
     player.play();
     set({ rate: 1 });
@@ -152,6 +162,12 @@ function NativeSurface({ source, nonce, resumeAt, style, onFail }: Props & { onF
       }
       set({ status: 'error', error: error?.message ?? 'Playback failed' });
     } else if (status === 'loading') {
+      // A stall (not a seek): wait for more buffer before resuming, so a shaky connection settles
+      // into smooth playback instead of a stop-start loop
+      if (hasPlayed.current && Date.now() - seekedAt.current > 3000) {
+        stalls.current++;
+        player.bufferOptions = { preferredForwardBufferDuration: profile.ahead, minBufferForPlayback: refillAfterStall(profile, stalls.current) };
+      }
       set({ status: 'loading' });
     } else if (status === 'readyToPlay') {
       if (pendingSeek.current) {

@@ -19,6 +19,10 @@ export interface Prefs {
   iosPlayer: 'auto' | 'vlc' | 'native';
   /** series: start the next episode after a countdown */
   autoplayNext: boolean;
+  /** how much the players buffer before starting and after a stall: fast channel switching vs. no stutter */
+  liveBuffer: 'fast' | 'balanced' | 'smooth';
+  /** Android TV / Fire TV: switch the TV's refresh rate to the video's frame rate while watching fullscreen */
+  matchFrameRate: boolean;
 }
 
 export const defaultPrefs: Prefs = {
@@ -33,6 +37,8 @@ export const defaultPrefs: Prefs = {
   previewInGuide: true,
   iosPlayer: 'auto',
   autoplayNext: true,
+  liveBuffer: 'balanced',
+  matchFrameRate: true,
 };
 
 export type VodFav = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };

@@ -13,6 +13,15 @@ import { formatDay, formatClock } from '../utils/format';
 import { DEFAULT_UA } from '../services/http';
 import { installedVersion, openUpdateSheet, updatesSupported, updateSource, useUpdater } from '../services/updates';
 import appJson from '../../app.json';
+import { DisplayMode } from '../../modules/display-mode';
+
+const BUFFER_LABELS = {
+  fast: { label: 'Fast start', detail: 'Quickest channel switching' },
+  balanced: { label: 'Balanced', detail: 'Recommended' },
+  smooth: { label: 'Smooth', detail: 'Fewest interruptions on a weak connection' },
+} as const;
+
+const hz = (rates: number[]) => rates.map((r) => (Math.abs(r - Math.round(r)) < 0.01 ? Math.round(r) : r.toFixed(2))).join(', ');
 
 /** Distinct titles across categories (the same item can be listed in several). */
 function countUnique(byCategory: Record<string, { id: string }[]>): number {
@@ -258,6 +267,42 @@ export function SettingsScreen() {
       value: prefs.streamFormat === 'auto' ? 'Automatic' : prefs.streamFormat === 'ts' ? 'MPEG-TS' : 'HLS',
       run: () => setPrefs({ streamFormat: cycle(['auto', 'ts', 'm3u8'] as const, prefs.streamFormat) as Prefs['streamFormat'] }),
     });
+    const buffer = prefs.liveBuffer ?? 'balanced';
+    r.push({
+      kind: 'item',
+      id: 'buffer',
+      label: 'Buffer',
+      icon: 'timer-sand',
+      detail: BUFFER_LABELS[buffer].detail,
+      value: BUFFER_LABELS[buffer].label,
+      run: () =>
+        openSheet({
+          title: 'Buffer',
+          subtitle: 'How much video Nova loads before it plays, and again after the stream stalls. More buffer means fewer interruptions.',
+          options: (['fast', 'balanced', 'smooth'] as const).map((v) => ({
+            label: BUFFER_LABELS[v].label,
+            detail: BUFFER_LABELS[v].detail,
+            selected: buffer === v,
+            onSelect: () => setPrefs({ liveBuffer: v }),
+          })),
+        }),
+    });
+    if (Platform.isTV && DisplayMode) {
+      const rates = DisplayMode.refreshRates();
+      const amazon = /amazon/i.test((Platform.constants as { Manufacturer?: string }).Manufacturer ?? '');
+      r.push({
+        kind: 'item',
+        id: 'framerate',
+        label: 'Match frame rate',
+        icon: 'motion-play-outline',
+        toggle: true,
+        on: prefs.matchFrameRate ?? true,
+        detail: amazon
+          ? 'Smooth 25/50 fps motion · also turn on Match original frame rate in Fire TV Display settings'
+          : `Smooth motion for 25/50 fps TV and films; the screen blinks as the TV switches${rates.length > 1 ? ` · TV: ${hz(rates)} Hz` : ''}`,
+        run: () => setPrefs({ matchFrameRate: !(prefs.matchFrameRate ?? true) }),
+      });
+    }
     r.push({ kind: 'item', id: 'preview', label: 'Preview in TV guide', icon: 'picture-in-picture-top-right', toggle: true, on: prefs.previewInGuide, run: () => setPrefs({ previewInGuide: !prefs.previewInGuide }) });
     r.push({ kind: 'item', id: 'autostart', label: 'Start with last channel', icon: 'play-box-outline', toggle: true, on: prefs.startWithLastChannel, run: () => setPrefs({ startWithLastChannel: !prefs.startWithLastChannel }) });
     r.push({ kind: 'item', id: 'autonext', label: 'Autoplay next episode', icon: 'skip-next-outline', toggle: true, on: prefs.autoplayNext ?? true, run: () => setPrefs({ autoplayNext: !(prefs.autoplayNext ?? true) }) });

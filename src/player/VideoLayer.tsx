@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
-import { usePlayer, resolveSource } from '../store/player';
+import { usePlayer, resolveSource, type Source } from '../store/player';
 import { useUI } from '../store/ui';
 import { useSettings, watchId } from '../store/settings';
 import { useLibrary } from '../store/library';
@@ -8,6 +8,7 @@ import { useVideoRect } from '../utils/hooks';
 import { VideoSurface } from './VideoSurface';
 import { usePlayback } from './playback';
 import { useMediaSession } from './mediaSession';
+import { DisplayMode } from '../../modules/display-mode';
 
 const RECONNECT_DELAYS = [2000, 4000, 8000];
 const STALL_MS = 20000;
@@ -42,6 +43,7 @@ export function VideoLayer() {
   useLiveRecovery(item);
   useReturnToLiveEdge();
   useLiveHistory(item);
+  useFrameRateMatch(source, nonce);
 
   if (!item || !source) return null;
 
@@ -112,6 +114,36 @@ function useLiveRecovery(item: ReturnType<typeof usePlayer.getState>['item']) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+}
+
+/**
+ * Android TV / Fire TV: while something plays fullscreen, switch the TV to a refresh rate that fits
+ * the video (25/50 fps → 50 Hz, films → 24 Hz) so motion doesn't judder, and back when playback stops.
+ * Measured once per stream, after it has played for a moment; the TV only changes mode when needed.
+ */
+function useFrameRateMatch(source: Source | null, nonce: number) {
+  const enabled = useSettings((s) => s.prefs.matchFrameRate ?? true) && Platform.isTV && !!DisplayMode;
+  const fullscreen = usePlayer((s) => s.fullscreen);
+  const playing = usePlayback((s) => s.status === 'playing');
+  const key = source ? `${source.uri}#${nonce}` : '';
+  const matched = useRef('');
+
+  useEffect(() => {
+    if (!enabled || !key || !fullscreen || !playing || matched.current === key) return;
+    // frames right after the start (or a reconnect) come in irregularly
+    const t = setTimeout(() => {
+      matched.current = key;
+      DisplayMode?.matchVideo().catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [enabled, key, fullscreen, playing]);
+
+  const active = !!source;
+  useEffect(() => {
+    if (enabled && active) return;
+    matched.current = '';
+    DisplayMode?.reset().catch(() => {});
+  }, [enabled, active]);
 }
 
 const LIVE_HISTORY_MS = 10000;
