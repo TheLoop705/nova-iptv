@@ -269,7 +269,11 @@ export function PlayerOverlay() {
     if (ctrl >= controls.length) setCtrl(controls.length - 1);
   }, [controls.length, ctrl]);
 
-  const togglePlay = () => (usePlayback.getState().status === 'playing' ? cmd.pause() : cmd.play());
+  const togglePlay = () => {
+    const current = usePlayback.getState().status;
+    // Buffering is still an active playback intent, even when the engine holds itself paused.
+    return current === 'playing' || current === 'loading' ? cmd.pause() : cmd.play();
+  };
 
   const audioSheet = () =>
     openSheet({

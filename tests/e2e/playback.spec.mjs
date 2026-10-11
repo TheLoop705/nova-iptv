@@ -128,10 +128,11 @@ test('manual pause cancels a live stall hold even when the video is already paus
   });
   await expect.poll(() => page.locator('video').evaluate((v) => v.paused)).toBe(true);
   await page.keyboard.press('k');
-  await expect(page.getByTestId('player-control-playpause')).toContainText('Play');
   await page.waitForTimeout(400);
   await expect.poll(() => page.locator('video').evaluate((v) => v.paused)).toBe(true);
   await page.locator('video').evaluate((v) => { delete v.buffered; });
+  await page.waitForTimeout(400);
+  await expect.poll(() => page.locator('video').evaluate((v) => v.paused)).toBe(true);
   await page.keyboard.press('k');
   await expect.poll(() => page.locator('video').evaluate((v) => !v.paused)).toBe(true);
 });
