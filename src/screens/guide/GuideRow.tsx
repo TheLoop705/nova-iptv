@@ -9,6 +9,7 @@ import { Logo } from '../../components/Logo';
 import { contextMenuProps } from '../../utils/contextMenu';
 import type { MenuAnchor } from '../../store/ui';
 import { Icon } from '../../components/Icon';
+import { HoverTitle } from '../../components/HoverTitle';
 
 export interface RowMetrics {
   rowH: number;
@@ -82,17 +83,10 @@ export const GuideRow = memo(function GuideRow(p: Props) {
         <Logo uri={p.channel.logo} name={p.channel.name} size={compact ? 30 : s(28)} />
         {!compact ? (
           <View style={{ flex: 1, marginLeft: s(9), marginRight: s(4) }}>
-            <Text
-              numberOfLines={1}
-              style={{ color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(13), fontWeight: '700', fontFamily: fonts.regular }}
-            >
-              {p.channel.name}
-            </Text>
+            <HoverTitle text={p.channel.name} style={{ color: chanFocused ? colors.focusText : p.playing ? colors.accent : colors.text, fontSize: s(13), fontWeight: '700', fontFamily: fonts.regular }} />
             {onNow ? (
               <>
-                <Text numberOfLines={1} style={{ color: chanFocused ? colors.focusDim : colors.muted, fontSize: s(11), marginTop: s(1), fontFamily: fonts.regular }}>
-                  {onNow.title || 'No information'}
-                </Text>
+                <HoverTitle text={onNow.title || 'No information'} containerStyle={{ marginTop: s(1) }} style={{ color: chanFocused ? colors.focusDim : colors.muted, fontSize: s(11), fontFamily: fonts.regular }} />
                 <View style={{ height: s(2), marginTop: s(3), backgroundColor: chanFocused ? colors.textDim : colors.surface3, borderRadius: radius.pill }}>
                   <View style={{ height: '100%', width: `${Math.round(onNowProgress * 100)}%`, backgroundColor: chanFocused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
                 </View>
@@ -140,10 +134,7 @@ export const GuideRow = memo(function GuideRow(p: Props) {
             >
               {width > s(14) ? (
                 <>
-                  <Text numberOfLines={1} style={{ color: fg, fontSize: compact ? 14 : s(12.5), fontWeight: current || focused ? '700' : '500', fontFamily: fonts.regular }}>
-                    {clipped ? '‹ ' : ''}
-                    {c.program ? c.program.title || 'Untitled' : 'No information'}
-                  </Text>
+                  <HoverTitle text={`${clipped ? '‹ ' : ''}${c.program ? c.program.title || 'Untitled' : 'No information'}`} style={{ color: fg, fontSize: compact ? 14 : s(12.5), fontWeight: current || focused ? '700' : '500', fontFamily: fonts.regular }} />
                   {!narrow && c.program ? (
                     <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: compact ? 12 : s(11), marginTop: s(1), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>
                       {formatRange(c.start, c.end, p.h24)}

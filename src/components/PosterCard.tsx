@@ -6,6 +6,7 @@ import type { MenuAnchor } from '../store/ui';
 import { Poster } from './Logo';
 import { Focusable } from './Focusable';
 import { Icon } from './Icon';
+import { HoverTitle } from './HoverTitle';
 
 /** Movie / series poster with its name, rating, watched mark and progress. Used by the grids and Home's rows. */
 export const PosterCard = React.memo(function PosterCard({
@@ -72,9 +73,8 @@ export const PosterCard = React.memo(function PosterCard({
             ) : null}
           </View>
           {bare ? null : (
-            <Text numberOfLines={1} style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600', marginTop: tv ? s(6) : 6 }}>
-              {item.name}
-            </Text>
+            <HoverTitle text={item.name} active={hovered} containerStyle={{ marginTop: tv ? s(6) : 6 }}
+              style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600' }} />
           )}
           {sub && !bare ? (
             <Text numberOfLines={1} style={{ color: colors.muted, fontSize: tv ? s(11) : 12 }}>

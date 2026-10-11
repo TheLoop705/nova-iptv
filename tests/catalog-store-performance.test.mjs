@@ -85,6 +85,116 @@ test('full listings coalesce, retain a successful half and retry only a failed h
   assert.equal(useLibrary.getState().vodAllLoaded, true);
 });
 
+test('series becomes usable while a parallel full movie listing is still pending', async () => {
+  seed();
+  let releaseMovies;
+  globalThis.__catalogApi.xtreamMovies = () => new Promise((resolve) => { releaseMovies = resolve; });
+  globalThis.__catalogApi.xtreamSeries = async () => [series];
+  const pending = useLibrary.getState().loadAllVod();
+  try {
+    for (let i = 0; i < 50 && !useLibrary.getState().seriesAllLoaded; i++) await pause(2);
+    assert.equal(useLibrary.getState().seriesAllLoaded, true, 'series must not wait for the movie endpoint');
+    assert.equal(useLibrary.getState().moviesAllLoaded, false);
+    assert.equal(useLibrary.getState().vodStatus.all, 'loading');
+    assert.deepEqual(useLibrary.getState().series['1'], [series]);
+  } finally {
+    releaseMovies?.([movie()]);
+    await pending;
+  }
+  assert.equal(useLibrary.getState().vodAllLoaded, true);
+});
+
+test('switching playlists cancels both parallel full listings and rejects their late results', async () => {
+  seed();
+  const releases = [], signals = [];
+  const delayed = (_p, _category, signal) => {
+    signals.push(signal);
+    return new Promise((resolve) => releases.push(resolve));
+  };
+  globalThis.__catalogApi.xtreamMovies = delayed;
+  globalThis.__catalogApi.xtreamSeries = delayed;
+  const pending = useLibrary.getState().loadAllVod();
+  try {
+    for (let i = 0; i < 50 && signals.length < 2; i++) await pause(2);
+    assert.equal(signals.length, 2);
+    useLibrary.getState().reset();
+    seed('b');
+    assert.ok(signals.every((signal) => signal.aborted));
+  } finally {
+    for (const resolve of releases) resolve([movie()]);
+    await pending;
+  }
+  assert.deepEqual(useLibrary.getState().movies, {});
+  assert.deepEqual(useLibrary.getState().series, {});
+});
+
+test('channels and guide loading become usable before slow cache persistence completes', async () => {
+  const p = { ...seed(), epgUrl: 'https://example.test/guide.xml' };
+  globalThis.__catalogSettings.playlists = [p];
+  await useLibrary.getState().load(p);
+  const setItem = globalThis.__catalogStorage.setItem;
+  let releaseWrite, writing = false;
+  globalThis.__catalogStorage.setItem = async (key, value) => {
+    if (key.includes(':channels:')) {
+      writing = true;
+      await new Promise((resolve) => { releaseWrite = resolve; });
+    }
+    return setItem(key, value);
+  };
+  useLibrary.getState().wantEpg();
+  const pending = useLibrary.getState().loadChannels({ force: true });
+  try {
+    for (let i = 0; i < 50 && (!writing || !globalThis.__catalogHttp.streamCalls); i++) await pause(2);
+    assert.equal(writing, true);
+    assert.equal(useLibrary.getState().status, 'ready');
+    assert.deepEqual(useLibrary.getState().channels, [channel]);
+    assert.equal(globalThis.__catalogHttp.streamCalls, 1, 'guide must start before cache writes finish');
+  } finally {
+    releaseWrite?.();
+    await pending;
+    globalThis.__catalogStorage.setItem = setItem;
+  }
+  // Warm visits should not rewrite an unchanged channel cache.
+  let writes = 0;
+  globalThis.__catalogStorage.setItem = async (...args) => { writes++; return setItem(...args); };
+  try {
+    useLibrary.setState({ status: 'idle' });
+    await useLibrary.getState().loadChannels();
+    assert.equal(writes, 0);
+  } finally { globalThis.__catalogStorage.setItem = setItem; }
+});
+
+test('M3U movies become usable before the combined channel cache finishes saving', async () => {
+  const p = { id: 'file', name: 'Import', type: 'm3u', inline: true, sourceRevision: 'first', createdAt: 1 };
+  globalThis.__catalogSettings.playlists = [p];
+  storage.set('m3u:file', '#EXTM3U\n#EXTINF:-1 group-title="Live",Channel\nhttps://example.test/live.ts\n#EXTINF:-1 group-title="Movies",Movie\nhttps://example.test/movie.mp4');
+  const setItem = globalThis.__catalogStorage.setItem;
+  let releaseWrite, writing = false;
+  globalThis.__catalogStorage.setItem = async (key, value) => {
+    if (key.includes(':channels:')) {
+      writing = true;
+      await new Promise((resolve) => { releaseWrite = resolve; });
+    }
+    return setItem(key, value);
+  };
+  const pending = useLibrary.getState().load(p);
+  try {
+    for (let i = 0; i < 50 && !writing; i++) await pause(2);
+    assert.equal(writing, true);
+    assert.equal(useLibrary.getState().catalogStatus, 'ready');
+    assert.equal(useLibrary.getState().movies.Movies[0].name, 'Movie');
+    // Opening Live while Home is still persisting must reuse its parsed data,
+    // without waiting for that write or parsing/downloading the playlist again.
+    await useLibrary.getState().loadChannels();
+    assert.equal(useLibrary.getState().status, 'ready');
+    assert.equal(useLibrary.getState().channels[0].name, 'Channel');
+  } finally {
+    releaseWrite?.();
+    await pending;
+    globalThis.__catalogStorage.setItem = setItem;
+  }
+});
+
 test('category results cannot cross a reset or an A-to-B-to-A playlist switch', async () => {
   seed();
   let finish, networkSignal;

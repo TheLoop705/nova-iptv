@@ -17,6 +17,8 @@ import { GuideRow, type RowMetrics } from './guide/GuideRow';
 import { Hero, PreviewSlot } from './guide/Hero';
 import { Icon } from '../components/Icon';
 import { Focusable } from '../components/Focusable';
+import { SectionStatus } from '../components/SectionStatus';
+import { useBrowseSession } from '../utils/browseSession';
 
 const HALF = 30 * 60000;
 const DAY = 86400000;
@@ -24,7 +26,7 @@ const align = (t: number) => Math.floor(t / HALF) * HALF;
 /** Window start for "now": keep at least ~10 minutes of the past visible */
 const nowWindow = (t: number) => align(t - 10 * 60000);
 
-type Zone = 'grid' | 'channels' | 'groups';
+type Zone = 'grid' | 'channels' | 'groups' | 'status';
 
 export function GuideScreen() {
   const { s, mode, width: winW } = useLayout();
@@ -32,6 +34,7 @@ export function GuideScreen() {
   const keyMode = useKeyMode();
 
   const pid = useLibrary((st) => st.playlistId);
+  const { saved, remember, update } = useBrowseSession<{ groupId: string; zone: Zone; channelId?: string; row: number; focusTime: number; windowStart: number; top: number }>(pid, 'guide');
   const byId = useLibrary((st) => st.byId);
   const epg = useLibrary((st) => st.epg);
   const epgStatus = useLibrary((st) => st.epgStatus);
@@ -53,18 +56,18 @@ export function GuideScreen() {
   // The guide data loads on first visit rather than at startup
   useEffect(() => useLibrary.getState().wantEpg(), []);
 
-  const [groupId, setGroupId] = useState(lastGroup ?? ALL);
+  const [groupId, setGroupId] = useState(saved?.groupId ?? lastGroup ?? ALL);
   const group = groups.find((g) => g.id === groupId) ?? groups.find((g) => g.id === ALL)!;
   const channels = useMemo(() => (group ? (group.channelIds.map((id) => byId[id]).filter(Boolean) as Channel[]) : []), [group, byId]);
   const favSet = useMemo(() => new Set(favorites ?? []), [favorites]);
   const playingId = item && item.kind !== 'vod' ? item.channelId : undefined;
 
   const W = 90 * 60000;
-  const [windowStart, setWindowStart] = useState(() => nowWindow(Date.now()));
+  const [windowStart, setWindowStart] = useState(() => saved?.windowStart ?? nowWindow(Date.now()));
   const windowEnd = windowStart + W;
-  const [zone, setZone] = useState<Zone>('grid');
-  const [row, setRow] = useState(0);
-  const [focusTime, setFocusTime] = useState(() => Date.now());
+  const [zone, setZone] = useState<Zone>(saved?.zone ?? 'grid');
+  const [row, setRow] = useState(saved?.row ?? 0);
+  const [focusTime, setFocusTime] = useState(() => saved?.focusTime ?? Date.now());
   const [groupIndex, setGroupIndex] = useState(0);
   const [digits, setDigits] = useState('');
   const digitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,8 +88,9 @@ export function GuideScreen() {
 
   // ---- list scrolling ----
   const listRef = useRef<FlatList<Channel>>(null);
-  const topRow = useRef(0);
+  const topRow = useRef(saved?.top ?? 0);
   const listH = useRef(0);
+  remember({ groupId: group?.id ?? groupId, zone, row, channelId: channels[row]?.id ?? saved?.channelId, focusTime, windowStart, top: topRow.current });
 
   const ensureVisible = useCallback(
     (r: number, animated = true, center = false) => {
@@ -105,7 +109,19 @@ export function GuideScreen() {
   );
 
   // Focus the playing channel (or the top) when the group changes
+  const restored = useRef(false);
   useEffect(() => {
+    if (!channels.length) return;
+    if (!restored.current && saved?.groupId === group?.id) {
+      restored.current = true;
+      const index = channels.findIndex((c) => c.id === saved.channelId);
+      setRow(index >= 0 ? index : Math.min(saved.row, channels.length - 1));
+      const top = Math.min(saved.top, Math.max(0, channels.length - 1));
+      topRow.current = top;
+      const timer = setTimeout(() => listRef.current?.scrollToOffset({ offset: top * rowH, animated: false }), 30);
+      return () => clearTimeout(timer);
+    }
+    restored.current = true;
     const idx = playingId ? channels.findIndex((c) => c.id === playingId) : -1;
     const r = Math.max(0, idx);
     setRow(r);
@@ -321,6 +337,11 @@ export function GuideScreen() {
   };
 
   const onKey = (e: KeyEvt): boolean | void => {
+    if (zone === 'status') {
+      if (e.key === 'select') { void useLibrary.getState().refreshEpg(true); return setZone('grid'); }
+      if (e.key === 'down' || e.key === 'back') return setZone('grid');
+      return false;
+    }
     if (e.key === 'digit' && e.digit !== undefined) return onDigit(e.digit);
     if (zone === 'groups') {
       const n = groups.length;
@@ -352,6 +373,7 @@ export function GuideScreen() {
     const visible = Math.max(1, Math.floor(listH.current / rowH));
     switch (e.key) {
       case 'up':
+        if (row === 0 && epgStatus === 'error') return setZone('status');
         return moveRow(-1, e.repeat === 0);
       case 'down':
         return moveRow(1, e.repeat === 0);
@@ -508,7 +530,7 @@ export function GuideScreen() {
         windowStart={windowStart}
         windowEnd={windowEnd}
         now={now}
-        focusMode={index === row && zone !== 'groups' ? (zone === 'channels' ? 'channel' : 'cell') : 'none'}
+        focusMode={index === row && (zone === 'channels' || zone === 'grid') ? (zone === 'channels' ? 'channel' : 'cell') : 'none'}
         focusTime={index === row ? focusTime : 0}
         playing={ch.id === playingId}
         favorite={favSet.has(ch.id)}
@@ -630,7 +652,7 @@ export function GuideScreen() {
             extraData={renderItem}
             getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
             onLayout={(e) => (listH.current = e.nativeEvent.layout.height)}
-            onScroll={(e) => (topRow.current = Math.round(e.nativeEvent.contentOffset.y / rowH))}
+            onScroll={(e) => { topRow.current = Math.round(e.nativeEvent.contentOffset.y / rowH); update({ top: topRow.current }); }}
             scrollEventThrottle={32}
             initialNumToRender={14}
             maxToRenderPerBatch={12}
@@ -655,7 +677,7 @@ export function GuideScreen() {
       </View>
       </View>
 
-      <GuideDownloadStatus s={s} tv={tv} />
+      <GuideDownloadStatus s={s} tv={tv} focused={zone === 'status' && !menuFocused} />
 
       {digits ? (
         <View pointerEvents="none" style={{ position: 'absolute', top: tv ? s(20) : 20, right: tv ? s(24) : 20, backgroundColor: colors.surface3, borderRadius: radius.lg, paddingHorizontal: 20, paddingVertical: 10, borderWidth: 1, borderColor: colors.borderStrong }}>
@@ -668,14 +690,15 @@ export function GuideScreen() {
 
 // Download progress changes frequently; subscribe here so it doesn't rebuild
 // the guide rows, hero and category column on every progress notification.
-function GuideDownloadStatus({ s, tv }: { s: (n: number) => number; tv: boolean }) {
+function GuideDownloadStatus({ s, tv, focused }: { s: (n: number) => number; tv: boolean; focused: boolean }) {
   const loading = useLibrary((state) => state.epgStatus === 'loading');
+  const failed = useLibrary((state) => state.epgStatus === 'error');
   const message = useLibrary((state) => state.epgMessage);
-  if (!loading) return null;
+  if (!loading && !failed) return null;
   return (
-    <View pointerEvents="none" style={{ position: 'absolute', right: tv ? s(16) : 12, bottom: tv ? s(10) : 10, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface3, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: colors.borderStrong }}>
-      <ActivityIndicator size="small" color={colors.accent} />
-      <Text style={{ color: colors.textDim, fontSize: tv ? s(11) : 12, marginLeft: 8 }}>{message ?? 'Updating guide…'}</Text>
+    <View style={{ position: 'absolute', right: tv ? s(16) : 12, bottom: tv ? s(10) : 10, backgroundColor: colors.surface3, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderStrong }}>
+      <SectionStatus label={failed ? 'TV guide unavailable' : message ?? 'Updating guide…'} loading={loading} focused={focused}
+        onRetry={failed ? () => { void useLibrary.getState().refreshEpg(true); } : undefined} testID="guide-status" />
     </View>
   );
 }

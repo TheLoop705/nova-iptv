@@ -160,6 +160,8 @@ test('Settings Count action stays navigable while catalogs load and caches exact
     await page.getByTestId('settings-lib-count').click();
     await expect.poll(() => held, { timeout: 10000 }).toBe(true);
     await expect(page.getByTestId('settings-lib-count')).toContainText('Counting');
+    // The series endpoint completes independently of the held movie response.
+    await expect(page.getByTestId('settings-lib-series')).toContainText(/10[,.\s]?000 series/, { timeout: 20000 });
     // Leave and reopen Settings while a complete catalog response remains pending.
     await navigate(page, 'home');
     await navigate(page, 'settings');
@@ -178,6 +180,146 @@ test('Settings Count action stays navigable while catalogs load and caches exact
     expect(count(after, 'get_vod_streams:all') - count(before, 'get_vod_streams:all')).toBe(1);
     expect(count(after, 'get_series:all') - count(before, 'get_series:all')).toBe(1);
   } finally { release(); }
+});
+
+test('Home exposes movies and navigation while series categories are delayed or fail', async ({ page }) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let held = false;
+  await page.route('**/api/proxy?*', async (route) => {
+    const target = new URL(new URL(route.request().url()).searchParams.get('url'));
+    if (target.searchParams.get('action') !== 'get_series_categories') return route.continue();
+    held = true;
+    await gate;
+    await route.fulfill({ status: 503, body: 'Temporarily unavailable' }).catch(() => {});
+  });
+  try {
+    await seed(page);
+    await expect.poll(() => held).toBe(true);
+    await expect(page.getByLabel('Tears of Steel', { exact: true }).first()).toBeVisible();
+    await navigate(page, 'settings');
+    await navigate(page, 'home');
+    await expect(page.getByLabel('Tears of Steel', { exact: true }).first()).toBeVisible();
+    release();
+    await expect(page.getByText('Loading movies and series…')).toHaveCount(0);
+    await navigate(page, 'movies');
+    await expect(page.getByLabel('Tears of Steel', { exact: true }).first()).toBeVisible();
+  } finally { release(); }
+});
+
+test('movie category, focused poster and scroll position survive section changes; Search remembers its query', async ({ page }) => {
+  await seed(page);
+  await navigate(page, 'movies');
+  await page.getByText('Movies | Animation', { exact: true }).click();
+  await page.getByTestId('vod-item-movies-v5004').click();
+  await expect(page.getByText('BipBop — mock movie.', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  const gridScroll = () => page.getByTestId('screen-movies').evaluate((root) => [...root.querySelectorAll('*')]
+    .filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight)
+    .sort((a, b) => b.scrollHeight - a.scrollHeight)[0]?.scrollTop ?? 0);
+  await page.getByTestId('screen-movies').evaluate((root) => {
+    const grid = [...root.querySelectorAll('*')].filter((el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+    grid.scrollTop = 900;
+  });
+  await expect.poll(gridScroll).toBeGreaterThan(700);
+  await navigate(page, 'series');
+  await navigate(page, 'movies');
+  await expect.poll(gridScroll).toBeGreaterThan(700);
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('BipBop — mock movie.', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await navigate(page, 'search');
+  await page.getByTestId('search-input').fill('Performance Movie 024999');
+  await expect(page.getByTestId('screen-search').getByTestId('hover-title').filter({ hasText: 'Performance Movie 024999' })).toBeVisible();
+  await navigate(page, 'settings');
+  await navigate(page, 'search');
+  await expect(page.getByTestId('search-input')).toHaveValue('Performance Movie 024999');
+  await expect(page.getByTestId('screen-search').getByTestId('hover-title').filter({ hasText: 'Performance Movie 024999' })).toBeVisible();
+  await page.keyboard.press('Control+k');
+  await expect(page.getByTestId('search-input')).toHaveValue('');
+  await navigate(page, 'home');
+  await page.getByTestId('home-filter-series').click();
+  await navigate(page, 'settings');
+  await navigate(page, 'home');
+  await expect(page.getByLabel('Tears of Steel', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Stream Lab', { exact: true })).toBeVisible();
+});
+
+test('failed Home rows keep usable content and retry only their category on mouse or remote selection', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/proxy?*', (route) => {
+    const target = new URL(new URL(route.request().url()).searchParams.get('url'));
+    if (target.searchParams.get('action') === 'get_vod_streams' && target.searchParams.get('category_id') === '10' && ++attempts === 1) {
+      return route.fulfill({ status: 503, body: 'Unavailable' });
+    }
+    return route.continue();
+  });
+  await seed(page);
+  await expect(page.getByTestId('home-row-m:10-status-retry')).toBeVisible();
+  await expect(page.getByLabel('Stream Lab', { exact: true })).toBeVisible();
+  expect(attempts).toBe(1);
+  // The first row is the failed movie category; down from the hero and OK retries it.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Tears of Steel', { exact: true })).toBeVisible();
+  expect(attempts).toBe(2);
+  await expect(page.getByTestId('home-row-m:10-status')).toHaveCount(0);
+});
+
+test('truncated title scrolls only on hover, stops on leave, and respects reduced motion', async ({ page }) => {
+  await seed(page);
+  await navigate(page, 'movies');
+  const card = page.getByTestId('vod-item-movies-v5005');
+  const title = card.getByTestId('hover-title');
+  await expect(card).toBeVisible();
+  await card.hover();
+  await expect(title).toHaveAttribute('data-scrolling', 'true');
+  await expect.poll(() => title.locator(':scope > *').evaluate((el) => {
+    const transform = getComputedStyle(el).transform;
+    return transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41;
+  })).toBeLessThan(-2);
+  await page.getByText('Movies', { exact: true }).last().hover();
+  await expect(title).not.toHaveAttribute('data-scrolling', 'true');
+  await expect.poll(() => title.locator(':scope > *').evaluate((el) => getComputedStyle(el).transform)).toBe('none');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await card.hover();
+  await expect(title).not.toHaveAttribute('data-scrolling', 'true');
+  await expect(title).toHaveAttribute('title', 'Performance Movie 000005');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.getByTestId('vod-item-movies-v5001').hover();
+  await expect(page.getByTestId('vod-item-movies-v5001').getByTestId('hover-title')).not.toHaveAttribute('data-scrolling', 'true');
+});
+
+test('a failed category endpoint has a remote-accessible retry without hiding the working kind', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/proxy?*', (route) => {
+    const target = new URL(new URL(route.request().url()).searchParams.get('url'));
+    if (target.searchParams.get('action') === 'get_series_categories' && ++attempts === 1) return route.fulfill({ status: 503, body: 'Unavailable' });
+    return route.continue();
+  });
+  await seed(page);
+  await expect(page.getByTestId('home-series-status-retry')).toBeVisible();
+  await expect(page.getByLabel('Tears of Steel', { exact: true })).toBeVisible();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Stream Lab', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('home-series-status')).toHaveCount(0);
+  expect(attempts).toBe(2);
+});
+
+test('guide failure keeps channels available and remote retry downloads only the guide', async ({ page }) => {
+  await seed(page, 8892);
+  await navigate(page, 'guide');
+  await expect(page.getByTestId('guide-status-retry')).toBeVisible();
+  const before = await stats(page, 8892);
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => count(await stats(page, 8892), 'xmltv')).toBe(count(before, 'xmltv') + 1);
+  await expect(page.getByTestId('guide-status-retry')).toBeVisible();
+  const after = await stats(page, 8892);
+  expect(count(after, 'get_live_streams')).toBe(count(before, 'get_live_streams'));
+  await expect(page.getByTestId('screen-guide')).toBeVisible();
 });
 
 test('empty XMLTV does not trigger a per-channel retry storm', async ({ page }, testInfo) => {

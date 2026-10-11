@@ -18,8 +18,11 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { useHomeRows, type HomeEntry, type HomeFilter, type HomeRow } from './home/rows';
 import { AmbientWash, Billboard, BillboardArt, FeaturedCard, FILTERS, TopBar, useHero, type HeroAction } from './home/Billboard';
 import { Rail, type RailMetrics } from './home/Rail';
+import { useBrowseSession } from '../utils/browseSession';
+import { SectionStatus } from '../components/SectionStatus';
 
-type Zone = 'tabs' | 'hero' | 'rows';
+type Zone = 'tabs' | 'hero' | 'rows' | 'status';
+interface HomePosition { filter: HomeFilter; zone: Zone; focusKey?: string; cols: Record<string, number>; heroBtn: number; tab: number; offset: number }
 
 /** Titles the spotlight takes turns with, and how long each one stays */
 const SPOTLIGHT_MAX = 6;
@@ -34,11 +37,15 @@ const SPOTLIGHT_MS = 9000;
 export function HomeScreen() {
   const { s, mode, width, height } = useLayout();
   const tv = mode === 'tv';
-  const [filter, setFilter] = useState<HomeFilter>('all');
+  const pid = useLibrary((st) => st.playlistId);
+  const { saved, remember, update } = useBrowseSession<HomePosition>(pid, 'home');
+  const [filter, setFilter] = useState<HomeFilter>(saved?.filter ?? 'all');
   const { rows, catsKnown } = useHomeRows(tv ? filter : 'all');
   const showFilter = useLibrary((st) => !!st.movieCats?.length && !!st.seriesCats?.length);
   const catalogStatus = useLibrary((st) => st.catalogStatus);
-  const pid = useLibrary((st) => st.playlistId);
+  const categoryErrors = useLibrary((st) => (st.vodStatus.movieCats === 'error' ? 1 : 0) | (st.vodStatus.seriesCats === 'error' ? 2 : 0));
+  const retryKinds = ([...(categoryErrors & 1 ? ['movies'] : []), ...(categoryErrors & 2 ? ['series'] : [])] as ('movies' | 'series')[]);
+  const [statusIndex, setStatusIndex] = useState(0);
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const menuFocused = useUI((st) => st.menuFocused);
@@ -64,11 +71,11 @@ export function HomeScreen() {
   const rowHeight = useCallback((r: HomeRow) => (r.wide ? m.wideRowH : m.rowH), [m]);
 
   // ---- focus: the spotlight, or a row (kept by key, so rows loading around it don't move it) and a card per row ----
-  const [zone, setZone] = useState<Zone>(tv ? 'hero' : 'rows');
-  const [focusKey, setFocusKey] = useState<string>();
-  const [cols, setCols] = useState<Record<string, number>>({});
-  const [heroBtn, setHeroBtn] = useState(0);
-  const [tab, setTab] = useState(0);
+  const [zone, setZone] = useState<Zone>(saved?.zone ?? (tv ? 'hero' : 'rows'));
+  const [focusKey, setFocusKey] = useState<string | undefined>(saved?.focusKey);
+  const [cols, setCols] = useState<Record<string, number>>(saved?.cols ?? {});
+  const [heroBtn, setHeroBtn] = useState(saved?.heroBtn ?? 0);
+  const [tab, setTab] = useState(saved?.tab ?? 0);
   const [hover, setHover] = useState<{ row: string; col: number } | null>(null);
   const lastRow = useRef(0);
   let rowIdx = focusKey ? rows.findIndex((r) => r.key === focusKey) : -1;
@@ -81,7 +88,9 @@ export function HomeScreen() {
   // Desktop: the billboard follows the pointer until a key is pressed
   const keyMode = useKeyMode();
   // the rows have been scrolled down (by a mouse; the remote moves `zone` instead)
-  const [scrolled, setScrolled] = useState(false);
+  const [scrolled, setScrolled] = useState((saved?.offset ?? 0) > 12);
+  const scrollOffset = useRef(saved?.offset ?? 0);
+  remember({ filter, zone, focusKey, cols, heroBtn, tab, offset: scrollOffset.current });
   // TV and desktop: the spotlight is showing — at the top of Home, before the remote goes into the rows
   const atTop = tv && (keyMode ? zone !== 'rows' : !scrolled);
   const hovered = hover ? rows.find((r) => r.key === hover.row)?.entries[hover.col] : undefined;
@@ -225,10 +234,22 @@ export function HomeScreen() {
   };
   const setCol = (r: HomeRow, c: number) => setCols((p) => ({ ...p, [r.key]: Math.max(0, Math.min(r.entries.length - 1, c)) }));
 
-  const keysEnabled = !menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen && rows.length > 0;
+  const keysEnabled = !menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen && (rows.length > 0 || !!categoryErrors);
   useKeys(
     (e) => {
       if (hover) setHover(null);
+      if (zone === 'status' || (!rows.length && retryKinds.length)) {
+        if (e.key === 'left') return statusIndex > 0 ? setStatusIndex(statusIndex - 1) : false;
+        if (e.key === 'right') return setStatusIndex(Math.min(retryKinds.length - 1, statusIndex + 1));
+        if (e.key === 'down' || e.key === 'back') return setZone('hero');
+        if (e.key === 'select') {
+          const lib = useLibrary.getState();
+          const kind = retryKinds[Math.min(statusIndex, retryKinds.length - 1)];
+          if (kind) void (kind === 'movies' ? lib.loadMovieCats() : lib.loadSeriesCats());
+          return setZone('hero');
+        }
+        return false;
+      }
       if (zone === 'tabs') {
         switch (e.key) {
           case 'left':
@@ -241,7 +262,7 @@ export function HomeScreen() {
           case 'back':
             return setZone('hero');
           case 'up':
-            return;
+            return categoryErrors ? setZone('status') : undefined;
           default:
             return false;
         }
@@ -265,7 +286,7 @@ export function HomeScreen() {
           case 'chdown':
             return setSlide((i) => i + 1);
           case 'up':
-            if (!showFilter) return;
+            if (!showFilter) return categoryErrors ? setZone('status') : undefined;
             setTab(FILTERS.findIndex((f) => f.id === filter));
             return setZone('tabs');
           default:
@@ -290,6 +311,7 @@ export function HomeScreen() {
         case 'chdown':
           return focusRow(rowIdx + 3);
         case 'select':
+          if (row.error) return retryRow(row);
           if (!focused) return;
           return e.long ? openOptions(focused) : open(row, focused);
         case 'menu':
@@ -358,7 +380,7 @@ export function HomeScreen() {
       sized.current = rows.length > 0;
       return;
     }
-    Animated.timing(heroAnim, { toValue: heroH, duration: 320, useNativeDriver: false }).start();
+    Animated.timing(heroAnim, { toValue: heroH, duration: 320, useNativeDriver: false, isInteraction: false }).start();
   }, [heroH, heroAnim, rows.length]);
   const artH = useMemo(() => Animated.add(heroAnim, s(56)), [heroAnim, s]);
 
@@ -366,11 +388,22 @@ export function HomeScreen() {
   const listRef = useRef<FlatList<HomeRow>>(null);
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const y = e.nativeEvent.contentOffset.y;
+    scrollOffset.current = y;
+    update({ offset: y });
     setScrolled((was) => (was ? y > 0 : y > 12));
-  }, []);
+  }, [update]);
   // Web: the mouse wheel scrolls the rows wherever the pointer is, the billboard included
   const rootRef = useRef<View>(null);
   const ready = rows.length > 0;
+  const restoredScroll = useRef(false);
+  useEffect(() => {
+    if (!ready || restoredScroll.current || !saved?.offset) return;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToOffset({ offset: saved.offset, animated: false });
+      restoredScroll.current = true;
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [ready, saved]);
   useEffect(() => {
     if (Platform.OS !== 'web' || !tv || !ready) return;
     const root = rootRef.current as unknown as HTMLElement | null;
@@ -398,6 +431,7 @@ export function HomeScreen() {
     press: (rk, c) => {
       const r = rows.find((x) => x.key === rk);
       const e = r?.entries[c];
+      if (r?.error) return retryRow(r);
       if (!r || !e) return;
       // the zone stays, so the billboard doesn't resize under the pointer
       setFocusKey(rk);
@@ -424,6 +458,7 @@ export function HomeScreen() {
         categoryId={r.categoryId}
         entries={r.entries}
         loading={r.loading}
+        error={r.error}
         wide={r.wide}
         focusCol={zone === 'rows' && index === rowIdx ? col : -1}
         active={zone === 'rows' && index === rowIdx}
@@ -438,6 +473,14 @@ export function HomeScreen() {
 
   // ---- states before there's anything to show ----
   if (!rows.length) {
+    if (categoryErrors) return (
+      <View style={{ flex: 1 }}>
+        <HomeCatalogStatus focusedIndex={keysEnabled ? statusIndex : -1} />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Text style={{ color: colors.textDim, textAlign: 'center' }}>{catsKnown ? 'Retry an unavailable section above.' : 'Other sections are still loading…'}</Text>
+        </View>
+      </View>
+    );
     if (!catsKnown || catalogStatus === 'loading' || catalogStatus === 'idle') return <LoadingScreen message="Loading movies and series…" />;
     return <EmptyHome enabled={!menuFocused && !detailOpen && !sheetOpen && !editorOpen && !fullscreen} />;
   }
@@ -454,7 +497,7 @@ export function HomeScreen() {
       maxToRenderPerBatch={3}
       windowSize={5}
       showsVerticalScrollIndicator={false}
-      onScroll={tv ? onScroll : undefined}
+      onScroll={onScroll}
       scrollEventThrottle={64}
       ListHeaderComponent={
         tv ? undefined : (
@@ -488,8 +531,28 @@ export function HomeScreen() {
         </>
       ) : null}
       {list}
+      <HomeCatalogStatus focusedIndex={zone === 'status' && keysEnabled ? statusIndex : -1} />
     </View>
   );
+}
+
+function retryRow(row: HomeRow) {
+  if (!row.categoryId) return;
+  const lib = useLibrary.getState();
+  void (row.kind === 'movies' ? lib.loadMovies(row.categoryId) : lib.loadSeries(row.categoryId));
+}
+
+function HomeCatalogStatus({ focusedIndex }: { focusedIndex: number }) {
+  const movies = useLibrary((st) => !st.movieCats ? st.vodStatus.movieCats : undefined);
+  const series = useLibrary((st) => !st.seriesCats ? st.vodStatus.seriesCats : undefined);
+  let index = 0;
+  return <View>{(['movies', 'series'] as const).map((kind) => {
+    const status = kind === 'movies' ? movies : series;
+    if (status !== 'error' && status !== 'loading') return null;
+    const focused = status === 'error' && index++ === focusedIndex;
+    return <SectionStatus key={kind} label={status === 'loading' ? `Loading ${kind}…` : `${kind === 'movies' ? 'Movies' : 'Series'} unavailable`} loading={status === 'loading'} focused={focused}
+      testID={`home-${kind}-status`} onRetry={status === 'error' ? () => { const lib = useLibrary.getState(); void (kind === 'movies' ? lib.loadMovieCats() : lib.loadSeriesCats()); } : undefined} />;
+  })}</View>;
 }
 
 /** Phones: the Nova mark, the playlist, and search. */

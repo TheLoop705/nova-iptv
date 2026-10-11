@@ -15,6 +15,9 @@ import { PosterCard } from '../../components/PosterCard';
 import { Focusable } from '../../components/Focusable';
 import { Icon } from '../../components/Icon';
 import { Skeleton } from '../../components/Skeleton';
+import { SectionStatus } from '../../components/SectionStatus';
+import { HoverTitle } from '../../components/HoverTitle';
+import { useBrowseSession } from '../../utils/browseSession';
 import type { HomeEntry, VodKind } from './rows';
 
 export interface RailMetrics {
@@ -48,6 +51,7 @@ interface Props {
   categoryId?: string;
   entries: HomeEntry[];
   loading: boolean;
+  error?: boolean;
   /** landscape cards */
   wide?: boolean;
   /** card with the remote's focus, -1 when the focus is in another row */
@@ -62,8 +66,12 @@ interface Props {
 }
 
 /** One Home row: its title and a sideways list of posters. */
-export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categoryId, entries, loading, wide, focusCol, active, m, onPress, onMenu, onHover }: Props) {
+export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categoryId, entries, loading, error, wide, focusCol, active, m, onPress, onMenu, onHover }: Props) {
   const { type } = useLayout();
+  const pid = useLibrary((st) => st.playlistId);
+  const { saved, remember, update } = useBrowseSession<{ offset: number }>(pid, `home-rail:${rowKey}`);
+  const offset = useRef(saved?.offset ?? 0);
+  remember({ offset: offset.current });
   const listRef = useRef<FlatList<HomeEntry>>(null);
   const cardW = wide ? m.wideW : m.posterW;
   const cardH = wide ? m.wideH : m.artH;
@@ -87,18 +95,18 @@ export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categor
   const keyMode = useKeyMode();
   const [hovered, setHovered] = useState(false);
   const [edges, setEdges] = useState({ start: true, end: false });
-  const offset = useRef(0);
   const overflows = m.padX * 2 + entries.length * step - m.gap > m.viewW;
   const pagers = Platform.OS === 'web' && m.tv && !keyMode && hovered && !loading && overflows;
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
       offset.current = contentOffset.x;
+      update({ offset: contentOffset.x });
       const start = contentOffset.x <= 2;
       const end = contentOffset.x + layoutMeasurement.width >= contentSize.width - 2;
       setEdges((p) => (p.start === start && p.end === end ? p : { start, end }));
     },
-    []
+    [update]
   );
   const page = (dir: 1 | -1) => listRef.current?.scrollToOffset({ offset: Math.max(0, offset.current + dir * Math.floor((m.viewW - m.padX * 2) / step) * step), animated: true });
 
@@ -136,7 +144,11 @@ export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categor
         </Text>
         {kindLabel ? <Text style={[type('caption'), { color: colors.muted, marginLeft: m.s(8), marginBottom: m.tv ? m.s(2) : 2 }]}>{kindLabel}</Text> : null}
       </View>
-      {loading ? (
+      {error ? (
+        <View style={{ height: cardH + m.padY * 2, justifyContent: 'center', paddingHorizontal: m.padX }}>
+          <SectionStatus label={`${title} unavailable`} focused={active && focusCol === 0} onRetry={() => onPress(rowKey, 0)} testID={`home-row-${rowKey}-status`} />
+        </View>
+      ) : loading ? (
         <View style={{ flexDirection: 'row', paddingHorizontal: m.padX, paddingVertical: m.padY, gap: m.gap, overflow: 'hidden' }}>
           {Array.from({ length: Math.ceil(m.viewW / step) }, (_, i) => (
             <Skeleton key={i} style={{ width: cardW, height: cardH, borderRadius: m.tv ? m.s(radius.md) : radius.md }} />
@@ -146,6 +158,7 @@ export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categor
         <FlatList
           ref={listRef}
           horizontal
+          contentOffset={{ x: saved?.offset ?? 0, y: 0 }}
           data={entries}
           keyExtractor={(e) => e.key}
           renderItem={renderItem}
@@ -160,7 +173,7 @@ export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categor
           maxToRenderPerBatch={8}
           windowSize={3}
           // only the web's pagers need to know where the row is
-          onScroll={Platform.OS === 'web' ? onScroll : undefined}
+          onScroll={onScroll}
           scrollEventThrottle={64}
         />
       )}
@@ -276,9 +289,7 @@ const WideCard = memo(function WideCard({
             </View>
           ) : null}
           <View style={{ position: 'absolute', left: k(9), right: thumbW + k(8), bottom: k(10) }}>
-            <Text numberOfLines={1} style={[type('label'), { color: colors.text }]}>
-              {cleanTitle(entry.item.name).title}
-            </Text>
+            <HoverTitle text={cleanTitle(entry.item.name).title} active={hovered} style={[type('label'), { color: colors.text }]} />
             {sub ? (
               <Text numberOfLines={1} style={[type('caption'), { color: colors.textDim }]}>
                 {sub}

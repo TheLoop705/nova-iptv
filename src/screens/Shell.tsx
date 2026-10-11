@@ -7,7 +7,6 @@ import { useLibrary } from '../store/library';
 import { useActivePlaylist } from '../store/settings';
 import { usePlayer } from '../store/player';
 import { Layer, useKeys } from '../input/keys';
-import { openSearch } from '../store/actions';
 import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
 import { Focusable } from '../components/Focusable';
@@ -83,7 +82,6 @@ export function Shell() {
         case 'down':
           return setRailIndex((i) => Math.min(NAV.length - 1, i + 1));
         case 'select':
-          if (NAV[railIndex].id === 'search') return openSearch();
           if (NAV[railIndex].id === screen) return setMenuFocused(false);
           return setScreen(NAV[railIndex].id);
         case 'right':
@@ -165,7 +163,7 @@ export function Shell() {
             <Focusable
               key={n.id}
               focused={menuFocused && i === railIndex}
-              onPress={() => (n.id === 'search' ? openSearch() : setScreen(n.id))}
+              onPress={() => setScreen(n.id)}
               testID={`nav-${n.id}`}
               accessibilityLabel={n.label}
               style={{
@@ -226,8 +224,6 @@ function Content({ screen }: { screen: Screen }) {
   const hasChannels = useLibrary((st) => st.channels.length > 0);
   const catalogStatus = useLibrary((st) => st.catalogStatus);
   const catalogError = useLibrary((st) => st.catalogError);
-  // Xtream: both category lists failed to load (and nothing was saved)
-  const noCatalog = useLibrary((st) => st.vodStatus.movieCats === 'error' && st.vodStatus.seriesCats === 'error');
 
   // Live TV channels load when Live TV is opened; Search asks for them too, for its channel results
   const wantsChannels = screen === 'guide' || screen === 'search';
@@ -238,22 +234,22 @@ function Content({ screen }: { screen: Screen }) {
   // Home, Movies and Series need movies and series only (and a working sign-in, so an expired account
   // never looks like a working library). They show their own loading state.
   if (screen === 'home' || screen === 'movies' || screen === 'series') {
-    if (catalogStatus === 'error' || noCatalog) return <LoadError error={catalogError ?? "Couldn't load movies and series."} />;
+    if (catalogStatus === 'error') return <LoadError error={catalogError} />;
   } else if (screen === 'guide') {
     if (!hasChannels && (status === 'loading' || status === 'idle')) return <LoadingScreen />;
     if (!hasChannels && status === 'error') return <LoadError error={error} />;
   }
   switch (screen) {
     case 'home':
-      return <HomeScreen />;
+      return <HomeScreen key={pid} />;
     case 'guide':
-      return <GuideScreen />;
+      return <GuideScreen key={pid} />;
     case 'movies':
       return <VodScreen key="movies" kind="movies" />;
     case 'series':
       return <VodScreen key="series" kind="series" />;
     case 'search':
-      return <SearchScreen />;
+      return <SearchScreen key={pid} />;
     case 'settings':
       return <SettingsScreen />;
   }

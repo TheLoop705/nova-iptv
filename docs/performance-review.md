@@ -6,6 +6,70 @@ Android TV and a native iOS Release simulator build. The tests measure responsiv
 checking that a download eventually finishes. Provider, codec and physical-device coverage remains
 separate from these deterministic results.
 
+## Responsiveness review — 12 October 2026
+
+Reviewed the loading and cache paths, Home/guide/catalog/search/details rendering, input routing,
+settings persistence, player lifecycle, web proxy, desktop bridge, and native module boundaries.
+The existing streaming parsers, cooperative search/indexing, virtualized lists, shared requests and
+single video surface already address the largest CPU and playback costs. This pass improves the
+remaining waits that prevent people from using content as soon as it is available.
+
+| Area | Finding | Change and user impact |
+| --- | --- | --- |
+| Full movie/series lists | Series did not start until movies had downloaded, grouped and persisted. | Start both streamed lists together, with at most two full-list requests per job. Each publishes independently; failed kinds retry independently and switches cancel both. A slow movie provider no longer hides completed series results. |
+| First Live TV visit | Downloaded channels waited for all cache pages to save before appearing or starting the guide. | Publish indexed channels and start the guide first, then persist inside the same cancellable job. The remote can browse/play channels during cache writes. Warm cache reads do not rewrite unchanged pages. |
+| M3U Home | Movies waited for the combined channel/movie cache to persist. | Publish movies before persisting the combined playlist cache, so an imported playlist with many live channels does not delay its movie browser. |
+| Home categories | Home waited for both category endpoints; one failed endpoint could hide the successful kind indefinitely. | Show the available kind immediately, recognize terminal category failures, and preserve existing category keys as the other kind arrives. Home already tracks remote focus by those keys. |
+| Movie browser | The browser subscribed to the whole watch-progress map. | Each memoized poster subscribes only to its own movie progress. Unrelated playback updates no longer rebuild the category browser and list window. |
+| Loading/hero animations | Decorative animation interactions could delay rendering additional virtualized rows. | Mark the shared skeleton pulse, hero resize and title fade as non-interactive. This follows [React Native's animation guidance](https://reactnative.dev/docs/animated#loop). |
+| Node test harness | Combining tsx's async loader and synchronous module hooks on Node 22 could produce null CommonJS source. | Supply the CommonJS bytes only for that specific loader error, keeping the existing performance command usable. |
+
+Validation uses Node 22.20.0, a production web export and Chromium on Linux. The shared regression
+checks cover independently completed catalogs, cancellation of both concurrent requests, usable
+channels/EPG during a blocked cache write, M3U visibility during persistence, partial Home categories,
+and bounded Home poster work. Browser checks additionally hold the movie response while asserting
+completed series totals, and delay/fail series categories while using Home and navigating away.
+The large browser fixture contains 25,000 movies, 10,000 series, 1,000 channels and 144,000 programmes.
+Typechecking, the production export, **99 source regressions** (including five update checks) and
+**nine deterministic browser tests** passed. Four of the source checks run the provider CLI against
+local mocks from a temporary directory. Browser validation used an equivalent temporary config
+without loading `.env` files and excluded the optional private-provider test.
+
+In the final guide test at 4× CPU slowdown, event-loop lag p95 was **17.5 ms** and key-to-next-frame
+p95 was **79.1 ms**. In the large catalog/navigation test those values were **12.8 ms** and
+**17.9 ms**. These are measurements on this Linux Chromium runner, without a before/after baseline
+for this pass; they establish passing responsiveness budgets rather than a measured speedup.
+
+This is a source and local-browser review. The earlier native measurements below are historical;
+this pass does not revalidate Fire TV, iOS hardware, Windows Electron or a private provider.
+Two concurrent streams discard raw catalog records but still retain both normalized libraries;
+measure peak memory and input responsiveness on a physical Fire TV before making device-level
+claims. Native settings still serialize a whole settings document, and the server still uses
+synchronous SQLite/JSON operations. Very large watch histories, many concurrent web clients and
+provider-specific poster decoding remain profiling candidates rather than demonstrated fixes.
+
+## Browsing UX follow-up — 12 October 2026
+
+The 12 October follow-up also adds bounded, session-only browsing snapshots scoped to each playlist
+and section. Home retains its filter, row/card cursor and scroll offsets; Movies/Series retain category,
+item ID and offset; the guide retains its channel, timeline and offset; Search retains query/result and
+offset; Settings retains its position. Removed items/categories fall back to valid current positions.
+Ordinary Search navigation preserves the query, while explicit keyboard/voice shortcuts clear it.
+
+Failed Home rows retain their keys and expose local retries instead of disappearing. Category,
+guide and search errors expose section retries without removing successful content. Remote routing
+remains in the existing JS key handlers, with white focus visuals and `focusable={false}` controls.
+Hovering an overflowing web title starts a compositor transform animation only for that title.
+Leaving, unmounting or enabling reduced motion cancels it. Short titles do not animate; reduced
+motion uses a full-title tooltip. Native title rendering retains its ordinary ellipsis behavior.
+
+Additional checks cover scoped/bounded browsing memory, failed Home row retention, actual browser
+category/cursor/scroll restoration, saved Search query plus a fresh shortcut, Home filter restoration,
+remote row/category/guide retries, and hover animation movement/cleanup/reduced-motion behavior.
+These follow-up changes are verified through the shared typecheck, source checks, production export
+and browser suite: **102 source regressions** (including five update checks) and **14 deterministic
+browser cases** passed. They do not add new physical-device measurements.
+
 ## Release integration — 7 October 2026
 
 The performance changes are integrated with the current Home redesign and on-demand Live TV

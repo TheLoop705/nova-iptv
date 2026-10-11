@@ -52,6 +52,9 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Favorites, recents, hidden groups, search** across channels, movies and series, with forgiving matching for dictated queries ("n tv" → n-tv, "channel four" → Channel 4, "canal plus" → Canal+).
 - **Voice search**: hold **☰ Menu** on the remote (or press a remote's Search/Assistant key, or `/` on the web) to jump to Search with the keyboard open. On Fire TV, then hold the remote's **mic** button and speak: the Fire TV keyboard types what you say. Amazon reserves the mic button for Alexa, so apps can't receive it directly. On the web there's a mic button (needs HTTPS or localhost); on phones use the keyboard's mic.
 - **Remote-first navigation**: every screen works with a D-pad (Fire TV remote, Android TV remote, keyboard arrows on the web). Touch and mouse work everywhere too.
+- **Pick up where you browsed**: Home's filter and rows, movie/series category and poster, the guide channel/timeline, Search's query/results, and Settings keep their position when you change sections. Positions are kept per playlist for the current app session. Search shortcuts still start a fresh query.
+- **Retry individual sections**: unavailable Home rows, categories, search catalogs and the TV guide show their own Retry control while available content remains usable. On a remote, OK retries a focused failed Home row; Up from the top reaches category/guide retries, and Down from Search's input reaches its retry.
+- **Read long titles**: on the web and Windows, hover a truncated title to scroll it horizontally. It stops when you leave. Reduced-motion users get the full title as a tooltip.
 
 ## Player
 

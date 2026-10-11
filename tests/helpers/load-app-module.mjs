@@ -32,7 +32,14 @@ registerHooks({
       }).outputText;
       return { format: 'module', source, shortCircuit: true };
     }
-    return nextLoad(url, context);
+    try {
+      return nextLoad(url, context);
+    } catch (error) {
+      // tsx's async loader returns null for CommonJS under Node 22. The
+      // synchronous hook validates that result before returning it to us.
+      if (error.code !== 'ERR_INVALID_RETURN_PROPERTY_VALUE' || !error.message.includes('got null') || !url.startsWith('file:') || !url.endsWith('.js')) throw error;
+      return { format: 'commonjs', source: readFileSync(new URL(url)), shortCircuit: true };
+    }
   },
 });
 

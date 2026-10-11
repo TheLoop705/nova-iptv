@@ -28,6 +28,7 @@ export interface HomeRow {
   entries: HomeEntry[];
   /** a category whose titles haven't arrived yet */
   loading: boolean;
+  error?: boolean;
 }
 
 /** Titles per category row; the rest are behind the row's "See all" card. */
@@ -89,11 +90,11 @@ export function useHomeRows(filter: HomeFilter = 'all'): { rows: HomeRow[]; cats
     [favs]
   );
 
-  // Which categories get a row, in order. Waits for both lists, so rows don't reshuffle when the second arrives.
+  // Render whichever list arrives first. Home keeps focus by row key when the
+  // other kind arrives; a slow or failed endpoint cannot hide usable titles.
   const order = useMemo(() => {
-    if (!movieCats || !seriesCats) return [];
-    const mc = movieCats;
-    const sc = seriesCats;
+    const mc = movieCats ?? [];
+    const sc = seriesCats ?? [];
     const byKey = new Map<string, { kind: VodKind; cat: Category }>();
     for (const c of mc) byKey.set('m:' + c.id, { kind: 'movies', cat: c });
     for (const c of sc) byKey.set('s:' + c.id, { kind: 'series', cat: c });
@@ -132,8 +133,9 @@ export function useHomeRows(filter: HomeFilter = 'all'): { rows: HomeRow[]; cats
       if (count >= CATEGORY_ROWS) break;
       if (filter !== 'all' && kind !== filter) continue;
       const titles = (kind === 'movies' ? movies[cat.id] : series[cat.id]) as (VodItem | SeriesItem)[] | undefined;
-      // categories that turn out empty, or fail to load, drop out and the next one moves up
-      if (titles ? !titles.length : vodStatus[key] === 'error') continue;
+      // Failed rows keep their place and offer an explicit retry; valid empty
+      // categories drop out. Retaining keys also retains the user's focus.
+      if (titles && !titles.length) continue;
       count++;
       out.push({
         key,
@@ -142,11 +144,13 @@ export function useHomeRows(filter: HomeFilter = 'all'): { rows: HomeRow[]; cats
         kind,
         categoryId: cat.id,
         entries: titles ? categoryEntries(titles, kind, cat) : [],
-        loading: !titles,
+        loading: !titles && vodStatus[key] !== 'error',
+        error: !titles && vodStatus[key] === 'error',
       });
     }
     return out;
   }, [resume, myList, order, movies, series, vodStatus, movieCats, seriesCats, filter]);
 
-  return { rows, catsKnown: movieCats !== null && seriesCats !== null };
+  return { rows, catsKnown: (movieCats !== null || vodStatus.movieCats === 'error') &&
+    (seriesCats !== null || vodStatus.seriesCats === 'error') };
 }

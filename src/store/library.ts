@@ -180,6 +180,8 @@ let epgForce = false;
 let channelJob: { generation: number; controller: AbortController; promise: Promise<void> } | undefined;
 let sourceReadiness: { generation: number; promise: Promise<boolean> } | undefined;
 let playlistFetch: { generation: number; signal?: AbortSignal; promise: Promise<PlaylistCache> } | undefined;
+// M3U Home and Live share parsed data until its initial cache write finishes.
+let preparedPlaylist: { generation: number; data: PlaylistCache } | undefined;
 let playlistController: AbortController | undefined;
 let stalePlaylistController: AbortController | undefined;
 let libraryGeneration = 0;
@@ -188,6 +190,7 @@ let epgJob: { generation: number; controller: AbortController; promise: Promise<
 const shortEpgControllers = new Map<string, AbortController>();
 
 function cancelLibraryWork() {
+  preparedPlaylist = undefined;
   playlistController?.abort();
   stalePlaylistController?.abort();
   channelJob?.controller.abort();
@@ -367,17 +370,26 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         await applyMovies(p, demoMovies(), signal, isCurrent);
         if (isCurrent()) set({ catalogStatus: 'ready' });
       } else {
+        let downloaded: PlaylistCache | undefined;
         await cachedVod<VodItem>(p, 'm3uMovies', signal, isCurrent, async () => {
-          const data = await fetchPlaylist(p, (m) => { if (isCurrent()) set({ message: m }); }, signal);
-          if (isCurrent()) await writePlaylistCache(p.id, data, signal).catch(() => {});
-          return data.movies;
+          downloaded = await fetchPlaylist(p, (m) => { if (isCurrent()) set({ message: m }); }, signal);
+          if (isCurrent()) preparedPlaylist = { generation, data: downloaded };
+          return downloaded.movies;
         }, (movies) => applyMovies(p, movies, signal, isCurrent), PLAYLIST_TTL);
+        // Imported/URL playlists can include a large live list as well. Publish
+        // their movies before writing that unrelated channel cache.
         if (isCurrent()) set({ catalogStatus: 'ready', message: undefined });
+        if (downloaded && isCurrent()) await writePlaylistCache(p.id, downloaded, signal).catch(() => {});
       }
-      if (isCurrent() && channelsWanted) void get().loadChannels({ force: !!opts.force || mismatch });
+      if (isCurrent() && channelsWanted && !(p.type === 'm3u' && get().status === 'ready')) {
+        void get().loadChannels({ force: !!opts.force || mismatch });
+      }
     } catch (error: any) {
       if (isCurrent()) set({ catalogStatus: 'error', catalogError: error?.message ?? String(error), message: undefined });
-    } finally { sourceChecked(false); }
+    } finally {
+      if (preparedPlaylist?.generation === generation) preparedPlaylist = undefined;
+      sourceChecked(false);
+    }
   },
 
   wantChannels: () => {
@@ -409,7 +421,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         return;
       }
       if (!isCurrent()) return;
-      let data = opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p);
+      let data = preparedPlaylist?.generation === generation ? preparedPlaylist.data :
+        opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p);
       if (!isCurrent()) return;
       if (data && (!data.source || !samePlaylistSource(data.source, p!))) {
         await Promise.all([removePlaylistCache(p!.id), removeEpgCache(p!.id)]);
@@ -418,11 +431,10 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         epgForce = true;
       }
       const stale = !!data && Date.now() - data.fetchedAt > PLAYLIST_TTL;
+      const downloaded = !data;
       if (!data) {
         data = await fetchPlaylist(p!, (m) => { if (isCurrent()) set({ message: m }); }, signal, get().account);
         if (!isCurrent()) return;
-        if (p!.type !== 'demo') await writePlaylistCache(p!.id, data, signal).catch(() => {});
-        if (p!.type === 'm3u') await writeVod(p!, 'm3uMovies', data.movies, signal).catch(() => {});
       }
       await applyChannels(data, signal, isCurrent);
       if (!isCurrent()) return;
@@ -432,6 +444,13 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         epgForce = false;
         void get().refreshEpg(force);
       }
+      // Make the guide usable before persisting hundreds of cache pages. Keep
+      // the writes in this job so refreshes still coalesce and switches cancel them.
+      if (downloaded && p!.type !== 'demo') {
+        await writePlaylistCache(p!.id, data, signal).catch(() => {});
+        if (isCurrent() && p!.type === 'm3u') await writeVod(p!, 'm3uMovies', data.movies, signal).catch(() => {});
+      }
+      if (!isCurrent()) return;
       if (stale && !opts.force && p!.type !== 'demo') {
         stalePlaylistController = new AbortController();
         const staleSignal = stalePlaylistController.signal;
@@ -672,24 +691,28 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     if (!p || p.type !== 'xtream' || get().vodAllLoaded) return;
     return catalogRequest('all', async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, all: 'loading' } }));
-      // Process one collection at a time: a Fire TV should not retain both raw
-      // provider responses plus their normalized copies at once.
-      if (!get().moviesAllLoaded) {
+      // Two independent streamed lists: a slow movie response must not delay
+      // series results. Parsers discard raw records and grouping yields to input;
+      // cache publication remains serialized by the per-playlist cache lock.
+      const loadMovies = async () => {
+        if (get().moviesAllLoaded) return;
         try {
           await cachedVod<VodItem>(p, 'allMovies', signal, isCurrent, () => xtreamMovies(p, undefined, signal), async (list) => {
             const data = await groupCatalog(list, signal);
             if (isCurrent()) set({ movies: data.byCategory, movieCount: data.count, moviesAllLoaded: true });
           });
         } catch { if (!isCurrent()) return; }
-      }
-      if (!get().seriesAllLoaded) {
+      };
+      const loadSeries = async () => {
+        if (get().seriesAllLoaded) return;
         try {
           await cachedVod<SeriesItem>(p, 'allSeries', signal, isCurrent, () => xtreamSeries(p, undefined, signal), async (list) => {
             const data = await groupCatalog(list, signal);
             if (isCurrent()) set({ series: data.byCategory, seriesCount: data.count, seriesAllLoaded: true });
           });
         } catch { if (!isCurrent()) return; }
-      }
+      };
+      await Promise.all([loadMovies(), loadSeries()]);
       if (!isCurrent()) return;
       const complete = get().moviesAllLoaded && get().seriesAllLoaded;
       set((s) => ({ vodAllLoaded: complete, vodStatus: { ...s.vodStatus, all: complete ? 'ready' : 'error' } }));

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { HoverTitle } from '../components/HoverTitle';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -408,15 +409,13 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                   style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: here ? colors.accentSoft : colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
-                  {({ focused }) => (
+                  {({ focused, hovered }) => (
                     <>
                       <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           {here ? <Badge label={resume.next ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
-                          <Text numberOfLines={1} style={{ flexShrink: 1, color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>
-                            {e.title}
-                          </Text>
+                          <HoverTitle text={e.title} active={hovered} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
                         </View>
                         {e.plot ? (
                           <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>

@@ -176,7 +176,7 @@ function useFadeIn(key: string | undefined) {
   const fade = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     fade.setValue(0);
-    Animated.timing(fade, { toValue: 1, duration: 280, useNativeDriver: nativeDriver }).start();
+    Animated.timing(fade, { toValue: 1, duration: 280, useNativeDriver: nativeDriver, isInteraction: false }).start();
   }, [key, fade]);
   return fade;
 }

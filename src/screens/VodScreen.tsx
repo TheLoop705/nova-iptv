@@ -13,8 +13,12 @@ import { Icon } from '../components/Icon';
 import { movieKey, playMovie } from '../services/vod';
 import { hasWatched, removeFromHistory, type Watched } from '../store/actions';
 import { formatDuration } from '../utils/format';
+import { useBrowseSession } from '../utils/browseSession';
+import { HoverTitle } from '../components/HoverTitle';
+import { SectionStatus } from '../components/SectionStatus';
 
 type Item = VodItem | SeriesItem;
+type Zone = 'cats' | 'grid' | 'retry';
 const RECENT = '__recent';
 const FAVS = '__fav';
 
@@ -27,6 +31,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   const { s, mode, width } = useLayout();
   const tv = mode === 'tv';
   const pid = useLibrary((st) => st.playlistId);
+  const { saved, remember } = useBrowseSession<{ selected?: string; catIndex: number; zone: Zone; gi: number; itemId?: string; offset: number }>(pid, kind);
   const cats = useLibrary((st) => (kind === 'movies' ? st.movieCats : st.seriesCats));
   const byCat = useLibrary((st) => (kind === 'movies' ? st.movies : st.series)) as Record<string, Item[]>;
   const vodStatus = useLibrary((st) => st.vodStatus);
@@ -35,7 +40,6 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   const loadItems = useLibrary((st) => (kind === 'movies' ? st.loadMovies : st.loadSeries));
   const favs = useSettings((st) => (pid ? st.vodFavorites[pid] : undefined));
   const recent = useSettings((st) => (pid ? st.recentMovies[pid] : undefined));
-  const progress = useSettings((st) => st.vodProgress);
   const favCats = useSettings((st) => (pid ? st.favCategories[favCatKey(pid, kind)] : undefined));
   const menuFocused = useUI((st) => st.menuFocused);
   const detail = useUI((st) => st.detail);
@@ -59,11 +63,14 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   }, [kind, recent?.length, favItems.length, cats, favCats]);
 
   // Home's "See all" opens a category with the grid focused
-  const browsed = useRef(useUI.getState().browse?.kind === kind ? useUI.getState().browse!.categoryId : undefined);
-  const [catIndex, setCatIndex] = useState(0);
+  const explicitCategory = useRef(useUI.getState().browse?.kind === kind ? useUI.getState().browse!.categoryId : undefined).current;
+  const browsed = useRef(explicitCategory ?? saved?.selected);
+  const [catIndex, setCatIndex] = useState(explicitCategory ? 0 : saved?.catIndex ?? 0);
   const [selected, setSelected] = useState<string | undefined>(browsed.current);
-  const [zone, setZone] = useState<'cats' | 'grid'>(browsed.current ? 'grid' : 'cats');
-  const [gi, setGi] = useState(0);
+  const [zone, setZone] = useState<Zone>(explicitCategory ? 'grid' : saved?.zone ?? 'cats');
+  const [gi, setGi] = useState(explicitCategory ? 0 : saved?.gi ?? 0);
+  const scrollOffset = useRef(explicitCategory ? 0 : saved?.offset ?? 0);
+  const restoreItem = useRef(explicitCategory ? undefined : saved?.itemId);
 
   useEffect(() => {
     if (useUI.getState().browse) useUI.setState({ browse: null });
@@ -114,7 +121,13 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
 
   const selectedList = selected ? byCat[selected] : undefined;
   const items: Item[] = selected === RECENT ? (recent ?? []) : selected === FAVS ? favItems : Array.isArray(selectedList) ? selectedList : [];
-  useEffect(() => { setGi((i) => Math.max(0, Math.min(i, items.length - 1))); }, [items.length]);
+  useEffect(() => {
+    if (!Array.isArray(selectedList) && selected !== RECENT && selected !== FAVS && !allLoaded) return;
+    const restored = restoreItem.current ? items.findIndex((it) => it.id === restoreItem.current) : -1;
+    restoreItem.current = undefined;
+    setGi((i) => restored >= 0 ? restored : Math.max(0, Math.min(i, items.length - 1)));
+  }, [items, selectedList, selected, allLoaded]);
+  remember({ selected, catIndex, zone, gi, itemId: items[gi]?.id ?? restoreItem.current, offset: scrollOffset.current });
   const categoryError = vodStatus[kind === 'movies' ? 'movieCats' : 'seriesCats'] === 'error';
   const itemStatus = selected ? vodStatus[(kind === 'movies' ? 'm:' : 's:') + selected] : undefined;
   const fullFailed = !!selected && selected !== RECENT && selected !== FAVS && !Array.isArray(selectedList) && !allLoaded && vodStatus.all === 'error';
@@ -143,6 +156,15 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
     const r = Math.floor(gi / cols);
     gridRef.current?.scrollToOffset({ offset: Math.max(0, r * rowH - (tv ? s(10) : 0)), animated: true });
   }, [gi, cols, rowH, tv, s]);
+  const restoredScroll = useRef(false);
+  useEffect(() => {
+    if (!items.length || restoredScroll.current) return;
+    const timer = setTimeout(() => {
+      gridRef.current?.scrollToOffset({ offset: explicitCategory ? 0 : saved?.offset ?? 0, animated: false });
+      restoredScroll.current = true;
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [items.length, explicitCategory, saved]);
 
   const open = (it: Item) => setDetail(kind === 'movies' ? { kind: 'movie', item: it as VodItem } : { kind: 'series', item: it as SeriesItem });
 
@@ -207,9 +229,15 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   }, []);
 
   const onKey = (e: KeyEvt): boolean | void => {
+    if (zone === 'retry') {
+      if (e.key === 'select') { void loadCats(); return setZone('cats'); }
+      if (e.key === 'down' || e.key === 'up' || e.key === 'back') return setZone('cats');
+      return false;
+    }
     if (zone === 'cats') {
       switch (e.key) {
         case 'up':
+          if (catIndex === 0 && categoryError && items.length) return setZone('retry');
           return setCatIndex((i) => Math.max(0, i - 1));
         case 'down':
           return setCatIndex((i) => Math.min(Math.max(0, allCats.length - 1), i + 1));
@@ -294,7 +322,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
                 style={{ height: catH - s(2), borderRadius: s(radius.sm), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center', backgroundColor: c.id === selected ? colors.accentSoft : 'transparent' }}
                 focusStyle={{ backgroundColor: colors.focus }}
               >
-                {({ focused }) => (
+                {({ focused, hovered }) => (
                   <>
                     {c.id === RECENT || c.id === FAVS || c.favorite ? (
                       <Icon
@@ -304,9 +332,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
                         style={{ marginRight: s(7) }}
                       />
                     ) : null}
-                    <Text numberOfLines={1} style={{ flex: 1, color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }}>
-                      {c.name}
-                    </Text>
+                    <HoverTitle text={c.name} active={hovered} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }} />
                   </>
                 )}
               </Focusable>
@@ -329,7 +355,10 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
         )}
 
         <View style={{ flex: 1 }}>
-          {loading ? (
+          {categoryError && items.length > 0 ? <SectionStatus label={`${title} categories unavailable`} focused={zone === 'retry'} onRetry={() => { void loadCats(); }} testID={`vod-category-status-${kind}`} /> : null}
+          {!cats && !categoryError && items.length > 0 ? <SectionStatus label="Loading categories…" loading testID={`vod-category-status-${kind}`} /> : null}
+          {loading && items.length > 0 ? <SectionStatus label={`Updating ${kind}…`} loading testID={`vod-status-${kind}`} /> : null}
+          {loading && !items.length ? (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <ActivityIndicator color={colors.accent} size="large" />
             </View>
@@ -354,17 +383,21 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
               initialNumToRender={4}
               windowSize={5}
               maxToRenderPerBatch={3}
+              onScroll={(e) => {
+                scrollOffset.current = e.nativeEvent.contentOffset.y;
+                remember({ selected, catIndex, zone, gi, itemId: items[gi]?.id, offset: scrollOffset.current });
+              }}
+              scrollEventThrottle={64}
               renderItem={({ item: it, index: idx }) => {
-                const prog = kind === 'movies' ? progress[movieKey(it as VodItem)] : undefined;
                 return <View style={{ height: rowH }}>
                       <VodPosterCard
                         item={it}
+                        kind={kind}
+                        playlistId={pid}
                         index={idx}
                         testID={`vod-item-${kind}-${it.id}`}
                         width={posterW}
                         focused={zone === 'grid' && gi === idx}
-                        progress={prog && prog.dur > 0 ? prog.pos / prog.dur : 0}
-                        watched={!!prog?.done}
                         tv={tv}
                         s={s}
                         onOpen={openPoster}
@@ -380,22 +413,26 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   );
 }
 
-const VodPosterCard = React.memo(function VodPosterCard({ item, index, testID, width, focused, progress, watched, tv, s, onOpen, onMenu }: {
+const VodPosterCard = React.memo(function VodPosterCard({ item, kind, playlistId, index, testID, width, focused, tv, s, onOpen, onMenu }: {
   item: Item;
+  kind: 'movies' | 'series';
+  playlistId?: string;
   index: number;
   testID: string;
   width: number;
   focused: boolean;
-  progress: number;
-  watched?: boolean;
   onMenu?: (item: Item, index: number, anchor?: MenuAnchor) => void;
   tv: boolean;
   s: (n: number) => number;
   onOpen: (item: Item, index: number) => void;
 }) {
+  // Playback updates only the affected poster, rather than the category browser
+  // and every virtualized row whenever any title's watch progress changes.
+  const key = kind === 'movies' ? `${playlistId}:movie:${item.id}` : undefined;
+  const prog = useSettings((st) => key ? st.vodProgress[key] : undefined);
   return (
     <View testID={testID} style={{ width }}>
-      <PosterCard item={item} width={width} focused={focused} progress={progress} watched={watched} tv={tv} s={s}
+      <PosterCard item={item} width={width} focused={focused} progress={prog && prog.dur > 0 ? prog.pos / prog.dur : 0} watched={!!prog?.done} tv={tv} s={s}
         onPress={() => onOpen(item, index)} onMenu={onMenu && ((anchor) => onMenu(item, index, anchor))} />
     </View>
   );
