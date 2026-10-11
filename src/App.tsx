@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Linking, Platform, View } from 'react-native';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { AppState, Linking, Platform, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as SplashScreen from 'expo-splash-screen';
@@ -23,6 +23,9 @@ import { UpdateProgress } from './components/UpdateProgress';
 import { BootScreen } from './components/LoadingScreen';
 import { useAutoUpdateCheck } from './services/updates';
 import { usePlayback } from './player/playback';
+import { startPerformanceMonitor } from './services/performance';
+import { playlistLoadPlan } from './services/playlistSource';
+import type { Playlist } from './types';
 
 // Keep the launch screen up until settings are read, so startup goes splash → Nova without a blank frame
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -55,6 +58,15 @@ function Root() {
   const hydrated = useSettings((s) => s.hydrated);
   const hasPlaylists = useSettings((s) => s.playlists.length > 0);
   const active = useActivePlaylist();
+  // Ignore display-only edits while retaining every field that changes provider data.
+  const activeSource = useMemo(() => active, [active?.id, active?.type,
+    active?.epgUrl, active?.userAgent,
+    active?.type === 'm3u' ? !!active.inline : undefined,
+    active?.type === 'm3u' ? active.inline ? active.sourceRevision : active.url : undefined,
+    active?.type === 'xtream' ? active.server : undefined,
+    active?.type === 'xtream' ? active.username : undefined,
+    active?.type === 'xtream' ? active.password : undefined]);
+  const previousSource = useRef<Playlist | undefined | null>(null);
   const editor = useUI((s) => !!s.editor);
   const fullscreen = usePlayer((s) => s.fullscreen && !!s.item);
 
@@ -74,6 +86,13 @@ function Root() {
       stop();
     };
   }, []);
+
+  useEffect(() => startPerformanceMonitor(() => Platform.OS === 'web'
+    ? typeof document === 'undefined' || document.visibilityState === 'visible'
+    : AppState.currentState === 'active', Platform.OS !== 'web', (changed) => {
+      const subscription = AppState.addEventListener('change', changed);
+      return () => subscription.remove();
+    }), []);
 
   // Voice/search shortcut works from every screen, including the fullscreen player
   useKeys(
@@ -100,15 +119,41 @@ function Root() {
     return () => sub.remove();
   }, []);
 
-  // (Re)load the library whenever the active playlist changes. Live TV channels wait until Live TV is opened,
-  // unless the last channel should start right away.
+  // This is the single owner of editor-triggered loads. A source edit under the
+  // same ID must invalidate the old cache and generation before new work starts.
   useEffect(() => {
     if (!hydrated) return;
-    if (!active) return useLibrary.getState().reset();
-    void useLibrary.getState().load(active);
-    const st = useSettings.getState();
-    if (st.prefs.startWithLastChannel && st.lastChannel[active.id]) useLibrary.getState().wantChannels();
-  }, [hydrated, active?.id]);
+    const plan = playlistLoadPlan(previousSource.current, activeSource);
+    previousSource.current = activeSource;
+    if (plan.action === 'none') return;
+    if (plan.stopPlayback) {
+      usePlayer.getState().stop();
+      useUI.getState().setDetail(null);
+    }
+    if (plan.action === 'reset' || !activeSource) {
+      useLibrary.getState().reset();
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void useLibrary.getState().load(activeSource, { force: plan.force });
+      const settings = useSettings.getState();
+      if (settings.prefs.startWithLastChannel && settings.lastChannel[activeSource.id]) {
+        useLibrary.getState().wantChannels();
+      }
+    };
+    if (plan.force) {
+      // clearCache resets immediately, aborting old requests before deleting files.
+      void useLibrary.getState().clearCache(activeSource.id).then(() => {
+        if (!cancelled) load();
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Could not clear the previous playlist cache.';
+        if (!cancelled) useLibrary.setState({ playlistId: activeSource.id, status: 'error', error: message,
+          catalogStatus: 'error', catalogError: message });
+      });
+    } else load();
+    return () => { cancelled = true; };
+  }, [hydrated, activeSource]);
 
   // Phones: fullscreen video goes landscape, the guide follows the device again afterwards
   useEffect(() => {

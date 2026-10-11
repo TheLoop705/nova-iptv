@@ -6,8 +6,10 @@ export interface Playlist {
   type: PlaylistType;
   /** M3U playlist URL (m3u) */
   url?: string;
-  /** Raw M3U text for playlists imported from a file */
+  /** Imported M3U text is stored separately under m3u:<id>. */
   inline?: boolean;
+  /** Changes whenever the imported file is replaced, even if its name is unchanged. */
+  sourceRevision?: string;
   /** Xtream Codes credentials */
   server?: string;
   username?: string;
@@ -135,5 +137,7 @@ export type PlayItem =
       poster?: string;
       userAgent?: string;
       /** next episode of a series, offered by the "Up next" countdown */
-      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>;
+      next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
+      /** the episode before, for the player's Previous episode */
+      prev?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
     };

@@ -1,5 +1,6 @@
 import type { Program } from '../types';
 import { decodeEntities, normalizeName } from '../utils/format';
+import { createCheckpoint } from '../utils/cooperative';
 
 export interface EpgData {
   /** programmes keyed by XMLTV channel id, sorted by start */
@@ -12,7 +13,7 @@ export interface EpgData {
 }
 
 export function emptyEpg(): EpgData {
-  return { programs: {}, names: {}, icons: {}, fetchedAt: Date.now() };
+  return { programs: Object.create(null), names: Object.create(null), icons: Object.create(null), fetchedAt: Date.now() };
 }
 
 /** "20260924120000 +0200" -> epoch ms */
@@ -77,31 +78,28 @@ export class XmltvParser {
     this.buf += chunk;
     let consumed = 0;
     const b = this.buf;
+    // Search both opening tags together. Looking for each tag separately rescans
+    // the entire remaining guide for a missing <channel> on every programme.
+    const tags = /<(programme|channel)(?=[\s/>])/g;
     while (true) {
-      const p = b.indexOf('<programme', consumed);
-      const c = b.indexOf('<channel', consumed);
-      let start: number;
-      let isProg: boolean;
-      if (p === -1 && c === -1) break;
-      if (p !== -1 && (c === -1 || p < c)) {
-        start = p;
-        isProg = true;
-      } else {
-        start = c;
-        isProg = false;
+      tags.lastIndex = consumed;
+      const tag = tags.exec(b);
+      if (!tag) {
+        // Preserve only enough tail for an opening tag split across two chunks.
+        consumed = Math.max(consumed, b.length - 12);
+        break;
+      }
+      const start = tag.index;
+      const isProg = tag[1] === 'programme';
+      const gt = b.indexOf('>', start);
+      if (gt !== -1 && b[gt - 1] === '/') {
+        if (!isProg) this.onChannel(b.slice(start, gt + 1));
+        consumed = gt + 1;
+        continue;
       }
       const closeTag = isProg ? '</programme>' : '</channel>';
       const end = b.indexOf(closeTag, start);
       if (end === -1) {
-        // Self-closing <channel id="x"/> is valid too
-        if (!isProg) {
-          const gt = b.indexOf('>', start);
-          if (gt !== -1 && b[gt - 1] === '/') {
-            this.onChannel(b.slice(start, gt + 1));
-            consumed = gt + 1;
-            continue;
-          }
-        }
         consumed = start;
         break;
       }
@@ -110,11 +108,9 @@ export class XmltvParser {
       else this.onChannel(el);
       consumed = end + closeTag.length;
     }
-    // keep only the unconsumed tail (bounded; drop junk that can't be an element start)
+    // A broken/truncated element must not retain an unbounded guide in memory.
     this.buf = consumed ? b.slice(consumed) : b;
-    if (this.buf.length > 4_000_000 && this.buf.indexOf('<programme') === -1 && this.buf.indexOf('<channel') === -1) {
-      this.buf = this.buf.slice(-2000);
-    }
+    if (this.buf.length > 1_048_576) throw new Error('The TV guide contains an oversized or incomplete XML element.');
   }
 
   private onChannel(el: string) {
@@ -125,6 +121,10 @@ export class XmltvParser {
     const re = /<display-name[^>]*>([\s\S]*?)<\/display-name>/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(el))) names.push(decodeEntities(m[1].trim()));
+    const keep = this.filter.ids.has(id.toLowerCase()) ||
+      this.filter.names.has(normalizeName(id)) || names.some((name) => this.filter.names.has(normalizeName(name)));
+    this.wanted.set(id, keep ? id : null);
+    if (!keep) return;
     this.displayNames.set(id, names);
     for (const n of names) {
       const k = normalizeName(n);
@@ -169,21 +169,37 @@ export class XmltvParser {
   }
 
   finish(): EpgData {
+    for (const k of Object.keys(this.data.programs)) this.finishChannel(k);
+    return this.finishData();
+  }
+
+  async finishAsync(signal?: AbortSignal): Promise<EpgData> {
+    const checkpoint = createCheckpoint(signal);
     for (const k of Object.keys(this.data.programs)) {
-      const list = this.data.programs[k];
-      list.sort((a, b) => a.start - b.start);
-      // drop overlaps/duplicates that some providers emit
-      const out: Program[] = [];
-      for (const p of list) {
-        const last = out[out.length - 1];
-        if (last && p.start < last.end) {
-          if (p.start === last.start) continue;
-          last.end = p.start;
-        }
-        out.push(p);
-      }
-      this.data.programs[k] = out;
+      this.finishChannel(k);
+      const pause = checkpoint();
+      if (pause) await pause;
     }
+    return this.finishData();
+  }
+
+  private finishChannel(k: string) {
+    const list = this.data.programs[k];
+    list.sort((a, b) => a.start - b.start);
+    const out: Program[] = [];
+    for (const p of list) {
+      const last = out[out.length - 1];
+      if (last && p.start < last.end) {
+        if (p.start === last.start) continue;
+        last.end = p.start;
+      }
+      out.push(p);
+    }
+    this.data.programs[k] = out;
+  }
+
+  private finishData(): EpgData {
+    if (/<(?:programme|channel)\b/.test(this.buf)) throw new Error('The TV guide ended before an XML element was complete.');
     this.data.fetchedAt = Date.now();
     this.buf = '';
     return this.data;
@@ -193,9 +209,9 @@ export class XmltvParser {
 /** Merge b into a (a wins on conflicting channel ids). */
 export function mergeEpg(a: EpgData, b: EpgData): EpgData {
   const out: EpgData = {
-    programs: { ...b.programs, ...a.programs },
-    names: { ...b.names, ...a.names },
-    icons: { ...b.icons, ...a.icons },
+    programs: Object.assign(Object.create(null), b.programs, a.programs),
+    names: Object.assign(Object.create(null), b.names, a.names),
+    icons: Object.assign(Object.create(null), b.icons, a.icons),
     fetchedAt: Math.max(a.fetchedAt, b.fetchedAt),
   };
   return out;

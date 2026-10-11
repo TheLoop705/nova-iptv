@@ -9,12 +9,12 @@ const NUMBER_WORDS: Record<string, string> = {
 };
 
 function fold(s: string): string {
-  return s
+  const t = s
     .toLowerCase()
     .replace(/\+/g, ' plus ')
-    .replace(/&/g, ' and ')
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '');
+    .replace(/&/g, ' and ');
+  // most titles are plain ASCII, which has no accents to strip
+  return /^[\x00-\x7f]*$/.test(t) ? t : t.normalize('NFKD').replace(/[̀-ͯ]/g, '');
 }
 
 const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
@@ -39,6 +39,19 @@ export function queryWords(q: string): string[][] {
 /** Title → one compact alphanumeric string that query words are looked up in. */
 export function compactTitle(title: string): string {
   return fold(title).replace(/[^a-z0-9]+/g, '');
+}
+
+// Lists are replaced, never changed in place, so a list's compact titles are worked out once
+const compactCache = new WeakMap<readonly { name: string }[], string[]>();
+
+/** The compact titles of a list (the channels, or one movie or series category), in the same order. */
+export function compactTitles(list: readonly { name: string }[]): string[] {
+  let out = compactCache.get(list);
+  if (!out) {
+    out = list.map((x) => compactTitle(x.name));
+    compactCache.set(list, out);
+  }
+  return out;
 }
 
 /**

@@ -108,6 +108,8 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         pause: () => {
           endHold();
           videoRef.current?.pause();
+          // A stall hold already paused the element, so no second pause event fires.
+          if (usePlayback.getState().status !== 'error') set({ status: 'paused' });
         },
         seekTo: (sec) => {
           endHold();
@@ -234,20 +236,25 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
     const video = videoRef.current;
     if (!video) return;
     let cancelled = false;
+    let attemptCleanups: (() => void)[] = [];
 
     const teardown = () => {
-      hlsRef.current?.destroy();
+      attemptCleanups.forEach((cleanup) => cleanup());
+      attemptCleanups = [];
+      const hls = hlsRef.current;
       hlsRef.current = null;
-      if (tsRef.current) {
+      hls?.destroy();
+      const ts = tsRef.current;
+      tsRef.current = null;
+      if (ts) {
         try {
-          tsRef.current.pause();
-          tsRef.current.unload();
-          tsRef.current.detachMediaElement();
-          tsRef.current.destroy();
+          ts.pause();
+          ts.unload();
+          ts.detachMediaElement();
+          ts.destroy();
         } catch {
           // already torn down
         }
-        tsRef.current = null;
       }
       video.removeAttribute('src');
       video.load();
@@ -289,6 +296,7 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
           video.removeEventListener('loadedmetadata', seek);
         };
         video.addEventListener('loadedmetadata', seek);
+        attemptCleanups.push(() => video.removeEventListener('loadedmetadata', seek));
       }
       video.play().catch((e) => {
         if (cancelled || e?.name !== 'NotAllowedError') return;
@@ -314,7 +322,9 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
       if (engine === 'hls') {
         const hls = new Hls(hlsConfig(profile));
         hlsRef.current = hls;
+        let recoveredMedia = false;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (cancelled || hlsRef.current !== hls) return;
           // Quality menu: one entry per resolution, best first ("Auto" = ABR)
           const seen = new Set<number>();
           const levels = hls.levels
@@ -330,24 +340,28 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
           startPlay();
         });
         hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
+          if (cancelled || hlsRef.current !== hls) return;
           const h = hls.levels[data.level]?.height;
           set({ autoQuality: h ? `${h}p` : undefined });
         });
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+          if (cancelled || hlsRef.current !== hls) return;
           set({
             audioTracks: hls.audioTracks.map((t, i) => ({ id: String(i), label: t.name || t.lang || `Audio ${i + 1}` })),
             audioIndex: hls.audioTrack,
           });
         });
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+          if (cancelled || hlsRef.current !== hls) return;
           set({
             subtitleTracks: hls.subtitleTracks.map((t, i) => ({ id: String(i), label: t.name || t.lang || `Subtitle ${i + 1}` })),
             subtitleIndex: hls.subtitleTrack,
           });
         });
         hls.on(Hls.Events.ERROR, (_e, data) => {
-          if (!data.fatal) return;
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          if (cancelled || hlsRef.current !== hls || !data.fatal) return;
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredMedia) {
+            recoveredMedia = true;
             hls.recoverMediaError();
             return;
           }
@@ -367,9 +381,11 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
         tsRef.current = player;
         let gotData = false;
         player.on(mpegts.Events.MEDIA_INFO, () => {
+          if (cancelled || tsRef.current !== player) return;
           gotData = true;
         });
         player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+          if (cancelled || tsRef.current !== player) return;
           next(gotData ? `Stream error: ${detail}` : `Stream unavailable (${type})`);
         });
         player.attachMediaElement(video);
@@ -381,6 +397,7 @@ export function VideoSurface({ source, nonce, resumeAt, style }: Props) {
           next(video.error?.message || 'This format is not supported in the browser');
         };
         video.addEventListener('error', onErr);
+        attemptCleanups.push(() => video.removeEventListener('error', onErr));
         video.src = url;
         startPlay();
       }

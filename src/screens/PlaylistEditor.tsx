@@ -13,6 +13,7 @@ import { Icon } from '../components/Icon';
 import type { Playlist, PlaylistType } from '../types';
 import { setItem } from '../services/storage';
 import { normalizeServer } from '../services/xtream';
+import { samePlaylistSource } from '../services/playlistSource';
 import { pickTextFile } from '../services/filepick';
 import { uid } from '../utils/format';
 import { focusScrollOffset } from '../utils/focusScroll';
@@ -68,6 +69,8 @@ export function PlaylistEditor() {
   });
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const saving = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [focus, setFocus] = useState(0);
   const currentFocus = useRef(focus);
   currentFocus.current = focus;
@@ -185,9 +188,10 @@ export function PlaylistEditor() {
   };
 
   const save = async () => {
+    if (saving.current) return;
     setError(null);
     const f = { ...form };
-    let type: PlaylistType = kind === 'xtream' ? 'xtream' : 'm3u';
+    const type: PlaylistType = kind === 'xtream' ? 'xtream' : 'm3u';
     if (kind === 'm3u' && !/^https?:\/\//i.test(f.url.trim())) return setError('Enter a valid http(s) playlist URL.');
     if (kind === 'xtream' && (!f.server.trim() || !f.username.trim() || !f.password)) return setError('Server, username and password are required.');
     if (kind === 'file' && !file && !editing?.inline) return setError('Choose an .m3u file first.');
@@ -206,6 +210,7 @@ export function PlaylistEditor() {
       type,
       url: kind === 'm3u' ? f.url.trim() : undefined,
       inline: kind === 'file' ? true : undefined,
+      sourceRevision: kind === 'file' ? file ? uid() : editing?.sourceRevision : undefined,
       server: kind === 'xtream' ? normalizeServer(f.server) : undefined,
       username: kind === 'xtream' ? f.username.trim() : undefined,
       password: kind === 'xtream' ? f.password : undefined,
@@ -213,17 +218,29 @@ export function PlaylistEditor() {
       userAgent: f.userAgent.trim() || undefined,
       createdAt: editing?.createdAt ?? Date.now(),
     };
-    if (kind === 'file' && file) await setItem('m3u:' + id, file.text);
-    if (editing) {
-      updatePlaylist(p);
-      await useLibrary.getState().clearCache(id);
-      if (useSettings.getState().activeId === id) void useLibrary.getState().load(p, { force: true });
-      showToast('Playlist updated');
-    } else {
-      addPlaylist(p);
-      showToast('Playlist added');
+    saving.current = true;
+    setIsSaving(true);
+    try {
+      if (kind === 'file' && file) await setItem('m3u:' + id, file.text);
+      if (editing) {
+        const st = useSettings.getState();
+        const activeId = (st.playlists.find((x) => x.id === st.activeId) ?? st.playlists[0])?.id;
+        // App invalidates and reloads an active source once. Inactive sources
+        // still need their previous derived cache removed before a later switch.
+        if (activeId !== id && !samePlaylistSource(editing, p)) await useLibrary.getState().clearCache(id);
+        updatePlaylist(p);
+        showToast('Playlist updated');
+      } else {
+        addPlaylist(p);
+        showToast('Playlist added');
+      }
+      close();
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not save the playlist.');
+    } finally {
+      saving.current = false;
+      setIsSaving(false);
     }
-    close();
   };
 
   const activate = (i: number) => {
@@ -455,7 +472,7 @@ export function PlaylistEditor() {
               collapsable={false}
               style={{ flexDirection: 'row', gap: k(10), marginTop: tv ? k(12) : k(22) }}
             >
-              <Button label={editing ? 'Save' : 'Add playlist'} icon="check" primary focused={focus === saveIdx} onPress={save} testID="editor-save" />
+              <Button label={isSaving ? 'Saving…' : editing ? 'Save' : 'Add playlist'} icon="check" primary focused={focus === saveIdx} onPress={save} testID="editor-save" />
               <Button label="Cancel" focused={focus === saveIdx + 1} onPress={close} />
             </View>
           </View>

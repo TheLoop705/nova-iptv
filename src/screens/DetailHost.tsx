@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { HoverTitle } from '../components/HoverTitle';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,7 +9,7 @@ import { colors, fonts, radius, useLayout } from '../theme';
 import { Chip } from '../components/Chip';
 import { useUI, type MenuAnchor } from '../store/ui';
 import { useSettings } from '../store/settings';
-import { useLibrary } from '../store/library';
+import { getLibraryGeneration, useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
 import { Layer, useKeys } from '../input/keys';
 import { Poster } from '../components/Logo';
@@ -23,11 +24,13 @@ import { formatDuration } from '../utils/format';
 /** Movie / series detail pages, shown over whichever screen opened them. */
 export function DetailHost() {
   const detail = useUI((s) => s.detail);
+  const pid = useLibrary((s) => s.playlistId);
+  const generation = useLibrary(() => getLibraryGeneration());
   const playing = usePlayer((s) => !!s.item && s.fullscreen);
   if (!detail) return null;
   return (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]}>
-      {detail.kind === 'movie' ? <MovieDetail item={detail.item} active={!playing} /> : <SeriesDetail item={detail.item} active={!playing} />}
+      {detail.kind === 'movie' ? <MovieDetail key={`${pid}:${generation}:movie:${detail.item.id}`} item={detail.item} active={!playing} /> : <SeriesDetail key={`${pid}:${generation}:series:${detail.item.id}`} item={detail.item} active={!playing} />}
     </View>
   );
 }
@@ -173,8 +176,12 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const setWatched = useSettings((st) => st.setWatched);
   const openSheet = useUI((st) => st.openSheet);
   const listRef = useRef<FlatList>(null);
-  const chipsRef = useRef<ScrollView>(null);
+  const seasonRef = useRef<FlatList>(null);
+  const phoneSeasonRef = useRef<FlatList>(null);
+  const phoneScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phoneScrollTries = useRef(0);
   const epH = tv ? s(62) : 76;
+  const seasonH = tv ? s(34) : 0;
 
   // Put the cursor on the episode to carry on with: the one you're in the middle of, or the next one
   const goToResume = (i: SeriesInfo) => {
@@ -248,17 +255,25 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   };
 
   useEffect(() => {
+    setEp((i) => Math.min(i, Math.max(0, episodes.length - 1)));
+  }, [season, episodes.length]);
+  useEffect(() => {
     listRef.current?.scrollToOffset({ offset: Math.max(0, (ep - 2) * epH), animated: true });
   }, [ep, season, epH]);
-
-  // Phones: bring the selected season's chip into view
-  const chipX = useRef<number[]>([]);
-  const scrollChips = (i: number) => chipsRef.current?.scrollTo({ x: Math.max(0, (chipX.current[i] ?? 0) - 16), animated: true });
   useEffect(() => {
-    if (!tv) scrollChips(season);
+    if (tv) seasonRef.current?.scrollToOffset({ offset: Math.max(0, (season - 3) * seasonH), animated: true });
+  }, [season, seasonH, tv]);
+  const scrollPhoneSeason = () => {
+    if (seasons.length) phoneSeasonRef.current?.scrollToIndex({ index: Math.max(0, Math.min(season, seasons.length - 1)), viewPosition: 0.2, animated: true });
+  };
+  useEffect(() => {
+    phoneScrollTries.current = 0;
+    if (!tv) scrollPhoneSeason();
+    return () => {
+      if (phoneScrollTimer.current) clearTimeout(phoneScrollTimer.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [season, tv]);
-
+  }, [season, seasons.length, tv]);
   const toHeader = () => {
     setHb(0);
     setZone('header');
@@ -286,7 +301,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       }
       // episodes
       if (e.key === 'up') return ep > 0 ? setEp(ep - 1) : toHeader();
-      if (e.key === 'down') return setEp(Math.min(episodes.length - 1, ep + 1));
+      if (e.key === 'down') return setEp(Math.min(Math.max(0, episodes.length - 1), ep + 1));
       if (e.key === 'left') return tv ? setZone('seasons') : undefined;
       if (e.key === 'select' && episodes[ep]) return e.long ? episodeSheet(episodes[ep]) : playEpisode(item, episodes[ep]);
       if (e.key === 'menu' && episodes[ep]) return episodeSheet(episodes[ep]);
@@ -330,7 +345,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
         <View style={{ flex: 1, flexDirection: tv ? 'row' : 'column', paddingHorizontal: tv ? s(28) : 0 }}>
           {tv ? (
             <View style={{ width: s(170) }}>
-              {seasons.map((se, i) => (
+              <FlatList ref={seasonRef} data={seasons} keyExtractor={(se) => String(se.season)} getItemLayout={(_d, i) => ({ length: seasonH, offset: seasonH * i, index: i })} initialNumToRender={10} windowSize={5} renderItem={({ item: se, index: i }) => (
                 <Focusable
                   key={se.season}
                   focused={zone === 'seasons' && i === season}
@@ -347,29 +362,25 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                     </Text>
                   )}
                 </Focusable>
-              ))}
+              )} />
             </View>
           ) : (
-            <ScrollView ref={chipsRef} horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }}>
-              {seasons.map((se, i) => (
-                <View
+            <FlatList ref={phoneSeasonRef} horizontal data={seasons} keyExtractor={(se) => String(se.season)} showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8, paddingBottom: 10 }} initialNumToRender={8} windowSize={5}
+              onScrollToIndexFailed={(failure) => {
+                phoneSeasonRef.current?.scrollToOffset({ offset: failure.averageItemLength * failure.index, animated: true });
+                if (phoneScrollTries.current++ < 2) phoneScrollTimer.current = setTimeout(scrollPhoneSeason, 150);
+              }}
+              renderItem={({ item: se, index: i }) => (
+                <Chip
                   key={se.season}
-                  onLayout={(e) => {
-                    chipX.current[i] = e.nativeEvent.layout.x;
-                    if (i === season) scrollChips(i);
+                  label={se.name}
+                  selected={i === season}
+                  onPress={() => {
+                    setSeason(i);
+                    setEp(firstIn(i));
                   }}
-                >
-                  <Chip
-                    label={se.name}
-                    selected={i === season}
-                    onPress={() => {
-                      setSeason(i);
-                      setEp(firstIn(i));
-                    }}
-                  />
-                </View>
-              ))}
-            </ScrollView>
+                />
+              )} />
           )}
           <FlatList
             ref={listRef}
@@ -377,6 +388,9 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
             data={episodes}
             keyExtractor={(e) => e.id}
             contentContainerStyle={{ paddingHorizontal: tv ? s(10) : 16, paddingBottom: 30 }}
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            windowSize={5}
             getItemLayout={(_d, i) => ({ length: epH, offset: epH * i, index: i })}
             // opens already scrolled to the preselected episode
             initialScrollIndex={Math.max(0, Math.min(ep - 2, episodes.length - 1))}
@@ -395,15 +409,13 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                   style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: here ? colors.accentSoft : colors.surface, marginBottom: tv ? s(6) : 8 }}
                   focusStyle={{ backgroundColor: colors.focus }}
                 >
-                  {({ focused }) => (
+                  {({ focused, hovered }) => (
                     <>
                       <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           {here ? <Badge label={resume.next ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
-                          <Text numberOfLines={1} style={{ flexShrink: 1, color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }}>
-                            {e.title}
-                          </Text>
+                          <HoverTitle text={e.title} active={hovered} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
                         </View>
                         {e.plot ? (
                           <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>

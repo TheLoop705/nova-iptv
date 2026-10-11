@@ -1,0 +1,35 @@
+name: Performance regressions
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  responsiveness:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      NOVA_TEST_PROVIDER: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:performance
+      - run: npm run test:updates
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build:perf:web
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: performance-${{ matrix.os }}
+          path: output/playwright/
+          if-no-files-found: ignore

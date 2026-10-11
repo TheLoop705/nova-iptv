@@ -3,6 +3,9 @@ import type { Source } from '../store/player';
 export interface MediaSessionInput {
   source: Source | null;
   isLive: boolean;
+  /** an episode with one before / after it */
+  hasPrev?: boolean;
+  hasNext?: boolean;
 }
 
 // Native: expo-video publishes Now Playing / the Android media session itself (see VideoSurface),

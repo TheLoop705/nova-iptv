@@ -14,6 +14,7 @@ import { DEFAULT_UA } from '../services/http';
 import { installedVersion, openUpdateSheet, updatesSupported, updateSource, useUpdater } from '../services/updates';
 import appJson from '../../app.json';
 import { DisplayMode } from '../../modules/display-mode';
+import { useBrowseSession } from '../utils/browseSession';
 
 const BUFFER_LABELS = {
   fast: { label: 'Fast start', detail: 'Quickest channel switching' },
@@ -22,13 +23,6 @@ const BUFFER_LABELS = {
 } as const;
 
 const hz = (rates: number[]) => rates.map((r) => (Math.abs(r - Math.round(r)) < 0.01 ? Math.round(r) : r.toFixed(2))).join(', ');
-
-/** Distinct titles across categories (the same item can be listed in several). */
-function countUnique(byCategory: Record<string, { id: string }[]>): number {
-  const ids = new Set<string>();
-  for (const list of Object.values(byCategory)) for (const it of list) ids.add(it.id);
-  return ids.size;
-}
 
 type Row =
   | { kind: 'header'; label: string }
@@ -62,31 +56,29 @@ export function SettingsScreen() {
   const update = useUpdater((st) => st.update);
   const updateProgress = useUpdater((st) => st.progress);
   const groupsCount = useLibrary((st) => st.groups.length);
-  const guideCount = useLibrary((st) => Object.keys(st.epg).length);
-  const movies = useLibrary((st) => st.movies);
-  const series = useLibrary((st) => st.series);
+  const epg = useLibrary((st) => st.epg);
+  const guideCount = useMemo(() => Object.keys(epg).length, [epg]);
+  const movieCount = useLibrary((st) => st.movieCount);
+  const seriesCount = useLibrary((st) => st.seriesCount);
   const movieCats = useLibrary((st) => st.movieCats?.length);
   const seriesCats = useLibrary((st) => st.seriesCats?.length);
   const vodAllLoaded = useLibrary((st) => st.vodAllLoaded);
-  // Movies and series are listed per category on Xtream: count them from one full listing (shared with search)
-  const movieCount = useMemo(() => countUnique(movies), [movies]);
-  const seriesCount = useMemo(() => countUnique(series), [series]);
+  const catalogStatus = useLibrary((st) => st.vodStatus.all);
   const menuFocused = useUI((st) => st.menuFocused);
   const openSheet = useUI((st) => st.openSheet);
   const openEditor = useUI((st) => st.openEditor);
   const editorOpen = useUI((st) => !!st.editor);
   const showToast = useUI((st) => st.showToast);
-  const [idx, setIdx] = useState(0);
+  const { saved, remember, update: updatePosition } = useBrowseSession<{ idx: number; offset: number }>(undefined, 'settings');
+  const [idx, setIdx] = useState(saved?.idx ?? 0);
+  const scrollOffset = useRef(saved?.offset ?? 0);
+  remember({ idx, offset: scrollOffset.current });
   const [uaEditing, setUaEditing] = useState(false);
   const uaRef = useRef<TextInput>(null);
   const listRef = useRef<FlatList<Row>>(null);
 
   const active = playlists.find((p) => p.id === activeId) ?? playlists[0];
-  const counting = active?.type === 'xtream' && !vodAllLoaded;
-  useEffect(() => {
-    if (active?.type === 'xtream') void useLibrary.getState().loadAllVod();
-    useLibrary.getState().wantEpg(); // guide status and count
-  }, [active?.id, active?.type]);
+  const counting = catalogStatus === 'loading';
 
   const playlistSheet = (p: Playlist) =>
     openSheet({
@@ -119,7 +111,7 @@ export function SettingsScreen() {
                   destructive: true,
                   onSelect: () => {
                     usePlayer.getState().stop();
-                    void useLibrary.getState().clearCache(p.id);
+                    void useLibrary.getState().clearCache(p.id, { removeSource: true });
                     removePlaylist(p.id);
                   },
                 },
@@ -213,7 +205,7 @@ export function SettingsScreen() {
       id: 'lib-movies',
       label: 'Movies',
       icon: 'movie-open-outline',
-      value: counting ? 'Counting…' : n(movieCount, 'movie', 'movies'),
+      value: movieCount !== undefined ? n(movieCount, 'movie', 'movies') : 'Browse movies',
       detail: movieCats ? n(movieCats, 'category', 'categories') : undefined,
       run: () => useUI.getState().setScreen('movies'),
     });
@@ -222,10 +214,18 @@ export function SettingsScreen() {
       id: 'lib-series',
       label: 'Series',
       icon: 'television-play',
-      value: counting ? 'Counting…' : n(seriesCount, 'series', 'series'),
+      value: seriesCount !== undefined ? n(seriesCount, 'series', 'series') : 'Browse series',
       detail: seriesCats ? n(seriesCats, 'category', 'categories') : undefined,
       run: () => useUI.getState().setScreen('series'),
     });
+    if (active?.type === 'xtream' && !vodAllLoaded) {
+      r.push({
+        kind: 'item', id: 'lib-count', label: 'Count movies and series', icon: 'counter',
+        value: counting ? 'Counting…' : catalogStatus === 'error' ? 'Retry' : 'Calculate',
+        detail: 'Downloads the complete catalog in the background.',
+        run: () => { void useLibrary.getState().loadAllVod(); },
+      });
+    }
 
     r.push({ kind: 'header', label: 'Watch history' });
     r.push({
@@ -385,7 +385,7 @@ export function SettingsScreen() {
     });
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playlists, active?.id, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, channelStatus, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, updateStatus, update, updateProgress]);
+  }, [playlists, active?.id, active?.type, account, epgStatus, epgFetchedAt, prefs, hidden, historyCount, activeId, channelsCount, channelStatus, groupsCount, guideCount, movieCount, seriesCount, movieCats, seriesCats, counting, catalogStatus, vodAllLoaded, updateStatus, update, updateProgress]);
 
   const items = rows.map((r, i) => ({ r, i })).filter((x) => x.r.kind === 'item');
   const rowPos = items[idx]?.i ?? 0;
@@ -401,9 +401,17 @@ export function SettingsScreen() {
     return o;
   }, [rows, rowH, headerH]);
 
+  const initialScroll = useRef(true);
   useEffect(() => {
+    if (initialScroll.current && saved?.offset) {
+      initialScroll.current = false;
+      return;
+    }
+    initialScroll.current = false;
     listRef.current?.scrollToOffset({ offset: Math.max(0, offsets[rowPos] - rowH * 3), animated: true });
-  }, [rowPos, offsets, rowH]);
+    // Loading totals should not scroll a pointer user's list back to its cursor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowPos, rowH]);
   useEffect(() => {
     if (idx >= items.length) setIdx(Math.max(0, items.length - 1));
   }, [items.length, idx]);
@@ -460,6 +468,9 @@ export function SettingsScreen() {
       ) : null}
       <FlatList
         ref={listRef}
+        contentOffset={{ x: 0, y: saved?.offset ?? 0 }}
+        onScroll={(e) => { scrollOffset.current = e.nativeEvent.contentOffset.y; updatePosition({ offset: scrollOffset.current }); }}
+        scrollEventThrottle={64}
         data={rows}
         keyExtractor={(r, i) => (r.kind === 'header' ? 'h' + r.label : r.id) + i}
         contentContainerStyle={{ paddingHorizontal: tv ? s(18) : 12, paddingBottom: 40, maxWidth: tv ? s(700) : 640, width: '100%' }}
@@ -471,6 +482,7 @@ export function SettingsScreen() {
             </View>
           ) : (
             <Focusable
+              testID={`settings-${r.id}`}
               focused={index === rowPos}
               onPress={() => {
                 setIdx(items.findIndex((x) => x.i === index));

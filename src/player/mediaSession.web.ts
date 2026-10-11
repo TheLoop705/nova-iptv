@@ -2,18 +2,23 @@ import { useEffect } from 'react';
 import type { Source } from '../store/player';
 import { zapChannel } from '../store/player';
 import { imageUrl } from '../services/http';
+import { dispatchKey } from '../input/keys';
 import { usePlayback } from './playback';
 
 export interface MediaSessionInput {
   source: Source | null;
   isLive: boolean;
+  /** an episode with one before / after it */
+  hasPrev?: boolean;
+  hasNext?: boolean;
 }
 
 /**
  * Browser Media Session API: title/artwork in the OS media overlay and hardware media keys
- * (play/pause, ±10 s, and previous/next track = previous/next channel while watching live TV).
+ * (play/pause, ±10 s, and previous/next track = previous/next channel while watching live TV, or the
+ * episode before / after).
  */
-export function useMediaSession({ source, isLive }: MediaSessionInput) {
+export function useMediaSession({ source, isLive, hasPrev, hasNext }: MediaSessionInput) {
   useEffect(() => {
     const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
     if (!ms || typeof MediaMetadata === 'undefined') return;
@@ -35,8 +40,8 @@ export function useMediaSession({ source, isLive }: MediaSessionInput) {
       ['seekbackward', (d) => cmd().seekBy(-(d.seekOffset ?? 10))],
       ['seekforward', (d) => cmd().seekBy(d.seekOffset ?? 10)],
       ['seekto', isLive ? null : (d) => d.seekTime != null && cmd().seekTo(d.seekTime)],
-      ['previoustrack', isLive ? () => zapChannel(-1) : null],
-      ['nexttrack', isLive ? () => zapChannel(1) : null],
+      ['previoustrack', isLive ? () => zapChannel(-1) : hasPrev ? () => dispatchKey({ key: 'prevtrack', repeat: 0 }) : null],
+      ['nexttrack', isLive ? () => zapChannel(1) : hasNext ? () => dispatchKey({ key: 'nexttrack', repeat: 0 }) : null],
     ];
     for (const [action, handler] of handlers) {
       try {
@@ -54,7 +59,7 @@ export function useMediaSession({ source, isLive }: MediaSessionInput) {
         }
       }
     };
-  }, [source, isLive]);
+  }, [source, isLive, hasPrev, hasNext]);
 
   // keep the OS scrubber in sync for movies and catch-up
   const position = usePlayback((s) => s.position);

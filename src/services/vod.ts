@@ -1,10 +1,12 @@
 import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } from '../types';
 import { useSettings, watchId } from '../store/settings';
-import { useLibrary } from '../store/library';
+import { getLibraryGeneration, useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
 import { useUI } from '../store/ui';
-import { xtreamMovieInfo, xtreamMovieUrl, xtreamSeriesInfo } from './xtream';
+import { xtreamEpisodeUrl, xtreamMovieInfo, xtreamMovieUrl, xtreamSeriesInfo } from './xtream';
 import { demoSeriesInfo } from './demo';
+import { SharedRequestCache } from './requestCache';
+import { createCheckpoint, throwIfAborted } from '../utils/cooperative';
 
 const activePlaylist = () => {
   const pid = useLibrary.getState().playlistId;
@@ -37,11 +39,41 @@ export function playMovie(item: VodItem, fromStart = false) {
   );
 }
 
-const seriesInfoCache = new Map<number, SeriesInfo>();
+const seriesInfoCache = new SharedRequestCache<SeriesInfo | null>();
+const movieInfoCache = new SharedRequestCache<MovieInfo>();
+let metadataScope = '';
+let playingSeries: { series: SeriesItem; info: SeriesInfo } | undefined;
+const episodeItemScopes = new WeakMap<object, string>();
+
+/** Provider IDs repeat across playlists; cached metadata belongs to one library generation. */
+function syncMetadataScope(): string {
+  const scope = `${useLibrary.getState().playlistId ?? ''}:${getLibraryGeneration()}`;
+  if (scope !== metadataScope) {
+    metadataScope = scope;
+    seriesInfoCache.clear();
+    movieInfoCache.clear();
+    playingSeries = undefined;
+  }
+  return scope;
+}
+
+async function requestMetadata<T>(generation: number, load: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const cancelIfChanged = () => { if (getLibraryGeneration() !== generation) controller.abort(); };
+  const unsubscribe = useLibrary.subscribe(cancelIfChanged);
+  try {
+    cancelIfChanged();
+    throwIfAborted(controller.signal);
+    const result = await load(controller.signal);
+    throwIfAborted(controller.signal);
+    return result;
+  } finally { unsubscribe(); }
+}
 
 /** The episode after `ep`: next in the season, else the first of the following season. */
 export function nextEpisode(series: SeriesItem, ep: Episode): Episode | undefined {
-  const info = seriesInfoCache.get(series.seriesId);
+  syncMetadataScope();
+  const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
   if (!info) return undefined;
   const seasons = info.seasons;
   const si = seasons.findIndex((s) => s.season === ep.season);
@@ -51,16 +83,47 @@ export function nextEpisode(series: SeriesItem, ep: Episode): Episode | undefine
   return seasons.slice(si + 1).find((s) => s.episodes.length)?.episodes[0];
 }
 
+/** Previous episode in this season, or the last episode of the preceding season. */
+export function prevEpisode(series: SeriesItem, ep: Episode): Episode | undefined {
+  syncMetadataScope();
+  const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
+  if (!info) return;
+  const si = info.seasons.findIndex((s) => s.season === ep.season);
+  if (si < 0) return;
+  const ei = info.seasons[si].episodes.findIndex((e) => e.id === ep.id);
+  if (ei > 0) return info.seasons[si].episodes[ei - 1];
+  if (ei < 0) return;
+  for (let s = si - 1; s >= 0; s--) {
+    const episodes = info.seasons[s].episodes;
+    if (episodes.length) return episodes[episodes.length - 1];
+  }
+}
+
 function episodeItem(series: SeriesItem, ep: Episode) {
-  return {
+  const p = activePlaylist();
+  const item = {
     kind: 'vod' as const,
     key: episodeKey(ep),
     title: series.name,
     subtitle: `S${ep.season} E${ep.episode} · ${ep.title}`,
-    url: ep.url,
+    url: p?.type === 'xtream' ? xtreamEpisodeUrl(p, ep.id, ep.ext || 'mp4') : ep.url,
     poster: ep.image ?? series.poster,
-    userAgent: activePlaylist()?.userAgent,
+    userAgent: p?.userAgent,
   };
+  episodeItemScopes.set(item, syncMetadataScope());
+  return item;
+}
+
+/** Resolve history against fresh metadata; removed entries start an available episode. */
+function currentEpisode(info: SeriesInfo, saved: Episode): Episode | undefined {
+  const season = info.seasons.find((s) => s.season === saved.season);
+  let exact = season?.episodes.find((e) => e.id === saved.id);
+  if (!exact) for (const s of info.seasons) {
+    exact = s.episodes.find((e) => e.id === saved.id);
+    if (exact) break;
+  }
+  return exact ?? season?.episodes.find((e) => e.episode === saved.episode)
+    ?? season?.episodes[0] ?? info.seasons.find((s) => s.episodes.length)?.episodes[0];
 }
 
 function recordEpisode(series: SeriesItem, ep: Episode) {
@@ -68,136 +131,136 @@ function recordEpisode(series: SeriesItem, ep: Episode) {
   if (pid) useSettings.getState().pushHistory(pid, { kind: 'episode', id: watchId.series(series.id), series, episode: ep, at: Date.now() });
 }
 
-export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
-  const progress = useSettings.getState().vodProgress[episodeKey(ep)];
+function linkedEpisode(series: SeriesItem, ep: Episode) {
   const after = nextEpisode(series, ep);
-  recordEpisode(series, ep);
+  const before = prevEpisode(series, ep);
+  return { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined,
+    prev: before ? episodeItem(series, before) : undefined };
+}
+
+export function playEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
+  syncMetadataScope();
+  const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
+  if (!info) return;
+  const resolved = currentEpisode(info, ep);
+  if (!resolved) return;
+  playingSeries = { series, info };
+  const progress = useSettings.getState().vodProgress[episodeKey(resolved)];
+  recordEpisode(series, resolved);
   usePlayer.getState().playVod(
-    { ...episodeItem(series, ep), next: after ? episodeItem(series, after) : undefined },
+    linkedEpisode(series, resolved),
     fromStart ? undefined : progress?.pos
   );
 }
 
 /** Play an "Up next" item, keeping the chain going to the episode after it. */
-export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next'>) {
-  for (const [seriesId, info] of seriesInfoCache) {
+export function playNextItem(next: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>, resume = false) {
+  const scope = syncMetadataScope();
+  const producedScope = episodeItemScopes.get(next);
+  if (producedScope && producedScope !== scope) return;
+  const knownInfos: [string, SeriesInfo | null][] = playingSeries ? [[String(playingSeries.series.seriesId), playingSeries.info]] : [...seriesInfoCache.entries()];
+  for (const [seriesId, info] of knownInfos) {
+    if (!info) continue;
     for (const season of info.seasons) {
       const ep = season.episodes.find((e) => episodeKey(e) === next.key);
       if (!ep) continue;
-      const known = useSettings.getState().history[useLibrary.getState().playlistId ?? '']?.find((h) => h.kind === 'episode' && h.series.seriesId === seriesId);
-      const series = known?.kind === 'episode' ? known.series : ({ id: String(seriesId), seriesId, name: next.title, poster: next.poster } as SeriesItem);
-      const after = nextEpisode(series, ep);
+      const known = useSettings.getState().history[useLibrary.getState().playlistId ?? '']?.find((h) => h.kind === 'episode' && h.series.seriesId === Number(seriesId));
+      const series = playingSeries?.series.seriesId === Number(seriesId) ? playingSeries.series : known?.kind === 'episode' ? known.series : ({ id: String(seriesId), seriesId: Number(seriesId), name: next.title, poster: next.poster } as SeriesItem);
+      const resumeAt = resume ? useSettings.getState().vodProgress[episodeKey(ep)] : undefined;
+      const at = resumeAt && !resumeAt.done && resumeAt.pos > 0 ? resumeAt.pos : undefined;
       recordEpisode(series, ep);
-      usePlayer.getState().playVod({ ...next, next: after ? episodeItem(series, after) : undefined });
+      usePlayer.getState().playVod(linkedEpisode(series, ep), at);
       return;
     }
   }
-  usePlayer.getState().playVod(next);
+  // A cancelled/removed series has no current metadata to authorize autoplay.
 }
 
 /** Resume an episode from Home: loads the season list first so "Up next" keeps working. */
 export async function resumeEpisode(series: SeriesItem, ep: Episode, fromStart = false) {
-  if (!seriesInfoCache.has(series.seriesId)) await loadSeriesInfo(series).catch(() => null);
-  playEpisode(series, ep, fromStart);
+  const scope = syncMetadataScope();
+  const info = await loadSeriesInfo(series).catch(() => null);
+  if (syncMetadataScope() !== scope || !info) return;
+  const resolved = currentEpisode(info, ep);
+  if (resolved) playEpisode(series, resolved, fromStart);
 }
 
 export interface ResumePoint {
-  /** index into `SeriesInfo.seasons` */
   season: number;
-  /** index into that season's episodes */
   index: number;
   episode: Episode;
-  /** the episode before it was watched to the end: this one is up next */
   next: boolean;
 }
 
-/**
- * Where to pick a series up: the episode watched most recently, or the one after it once that's finished
- * (the last episode stays put). Reads each episode's watch progress, which outlives the 40-entry history,
- * plus the history entry for episodes stopped too early to have progress. Undefined if nothing was watched.
- */
+/** Watch progress survives the shorter Recently watched history. */
 export function seriesResumePoint(series: SeriesItem, info: SeriesInfo): ResumePoint | undefined {
   const pid = useLibrary.getState().playlistId;
   const { vodProgress, history } = useSettings.getState();
   const last = pid ? history[pid]?.find((h) => h.kind === 'episode' && h.series.id === series.id) : undefined;
   const lastId = last?.kind === 'episode' ? last.episode.id : undefined;
-  const seasons = info.seasons;
-  let si = -1;
-  let ei = -1;
-  let latest = 0;
-  for (let s = 0; s < seasons.length; s++) {
-    for (let e = 0; e < seasons[s].episodes.length; e++) {
-      const ep = seasons[s].episodes[e];
-      const at = Math.max(vodProgress[episodeKey(ep)]?.at ?? 0, ep.id === lastId ? last!.at : 0);
-      if (at > latest) [latest, si, ei] = [at, s, e];
-    }
+  let si = -1, ei = -1, latest = 0;
+  for (let s = 0; s < info.seasons.length; s++) for (let e = 0; e < info.seasons[s].episodes.length; e++) {
+    const ep = info.seasons[s].episodes[e];
+    const at = Math.max(vodProgress[episodeKey(ep)]?.at ?? 0, ep.id === lastId ? last!.at : 0);
+    if (at > latest) { latest = at; si = s; ei = e; }
   }
-  if (si < 0) return undefined;
-  const pr = vodProgress[episodeKey(seasons[si].episodes[ei])];
+  if (si < 0) return;
+  const episodes = info.seasons[si].episodes;
+  const pr = vodProgress[episodeKey(episodes[ei])];
   if (pr?.done && !(pr.pos > 0)) {
-    if (ei + 1 < seasons[si].episodes.length) return { season: si, index: ei + 1, episode: seasons[si].episodes[ei + 1], next: true };
-    const later = seasons.findIndex((s, i) => i > si && s.episodes.length > 0);
-    if (later >= 0) return { season: later, index: 0, episode: seasons[later].episodes[0], next: true };
+    if (ei + 1 < episodes.length) return { season: si, index: ei + 1, episode: episodes[ei + 1], next: true };
+    for (let s = si + 1; s < info.seasons.length; s++) if (info.seasons[s].episodes.length)
+      return { season: s, index: 0, episode: info.seasons[s].episodes[0], next: true };
   }
-  return { season: si, index: ei, episode: seasons[si].episodes[ei], next: false };
+  return { season: si, index: ei, episode: episodes[ei], next: false };
 }
 
-/**
- * Carry a series on where you left it (see seriesResumePoint), or start the first episode. `ep` is the
- * episode Home's Recently watched remembers, used if the episode list can't be loaded.
- */
+/** Resolve the resume point against current metadata before using any remembered episode. */
 export async function continueSeries(series: SeriesItem, ep?: Episode) {
-  let info = seriesInfoCache.get(series.seriesId) ?? null;
-  if (!info) {
-    useUI.getState().showToast('Loading episodes…');
-    info = await loadSeriesInfo(series).catch(() => null);
-  }
-  const target = (info && seriesResumePoint(series, info)?.episode) ?? ep ?? info?.seasons.find((s) => s.episodes.length)?.episodes[0];
-  if (target) playEpisode(series, target);
-  else useUI.getState().setDetail({ kind: 'series', item: series });
+  const scope = syncMetadataScope();
+  if (!seriesInfoCache.get(String(series.seriesId))) useUI.getState().showToast('Loading episodes…');
+  const info = await loadSeriesInfo(series).catch(() => null);
+  if (syncMetadataScope() !== scope) return;
+  if (!info) { useUI.getState().setDetail({ kind: 'series', item: series }); return; }
+  const resolved = seriesResumePoint(series, info)?.episode ?? (ep ? currentEpisode(info, ep) : info.seasons.find((s) => s.episodes.length)?.episodes[0]);
+  if (!resolved) { useUI.getState().setDetail({ kind: 'series', item: series }); return; }
+  const pr = useSettings.getState().vodProgress[episodeKey(resolved)];
+  const next = pr?.done && !(pr.pos > 0) ? nextEpisode(series, resolved) : undefined;
+  playEpisode(series, next ?? resolved);
 }
 
-/** Recently fetched movie details, so Home's billboard and the detail page don't ask twice. */
-const movieInfoCache = new Map<string, Promise<MovieInfo | null>>();
-const movieInfoDone = new Map<string, MovieInfo | null>();
-const MOVIE_INFO_MAX = 300;
-const movieInfoKey = (item: VodItem) => `${useLibrary.getState().playlistId}:${item.streamId}`;
-
-export function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
-  const p = activePlaylist();
-  if (p?.type !== 'xtream' || !item.streamId) return Promise.resolve(null);
-  const key = movieInfoKey(item);
-  const hit = movieInfoCache.get(key);
-  if (hit) return hit;
-  const req = xtreamMovieInfo(p, item.streamId);
-  movieInfoCache.set(key, req);
-  req.then(
-    (info) => movieInfoDone.set(key, info),
-    () => movieInfoCache.delete(key) // failures aren't remembered
-  );
-  if (movieInfoCache.size > MOVIE_INFO_MAX) {
-    const oldest = movieInfoCache.keys().next().value!;
-    movieInfoCache.delete(oldest);
-    movieInfoDone.delete(oldest);
-  }
-  return req;
-}
-
-/** Movie details that have already arrived (undefined when not fetched yet), without a request. */
 export function peekMovieInfo(item: VodItem): MovieInfo | null | undefined {
-  return item.streamId ? movieInfoDone.get(movieInfoKey(item)) : null;
+  syncMetadataScope();
+  return item.streamId ? movieInfoCache.get(String(item.streamId)) : null;
 }
 
-/** Watch-progress keys of every episode of a series (loads the episode list if it isn't known yet). */
 export async function seriesProgressKeys(series: SeriesItem): Promise<string[]> {
-  const info = seriesInfoCache.get(series.seriesId) ?? (await loadSeriesInfo(series).catch(() => null));
-  return (info?.seasons ?? []).flatMap((s) => s.episodes.map(episodeKey));
+  const scope = syncMetadataScope();
+  const info = await loadSeriesInfo(series).catch(() => null);
+  if (!info || scope !== syncMetadataScope()) return [];
+  const keys: string[] = [];
+  const checkpoint = createCheckpoint();
+  for (const season of info.seasons) for (const ep of season.episodes) {
+    if (scope !== syncMetadataScope()) return [];
+    keys.push(episodeKey(ep));
+    const pause = checkpoint();
+    if (pause) await pause;
+  }
+  return keys;
+}
+
+export async function loadMovieInfo(item: VodItem): Promise<MovieInfo | null> {
+  syncMetadataScope();
+  const p = activePlaylist();
+  const generation = getLibraryGeneration();
+  if (p?.type === 'xtream' && item.streamId) return movieInfoCache.load(String(item.streamId), () => requestMetadata(generation, (signal) => xtreamMovieInfo(p, item.streamId!, signal)));
+  return null;
 }
 
 export async function loadSeriesInfo(item: SeriesItem): Promise<SeriesInfo | null> {
+  syncMetadataScope();
   const p = activePlaylist();
   if (!p) return null;
-  const info = p.type === 'demo' ? demoSeriesInfo(item.seriesId) : p.type === 'xtream' ? await xtreamSeriesInfo(p, item.seriesId) : null;
-  if (info) seriesInfoCache.set(item.seriesId, info);
-  return info;
+  const generation = getLibraryGeneration();
+  return seriesInfoCache.load(String(item.seriesId), async () => p.type === 'demo' ? demoSeriesInfo(item.seriesId) : p.type === 'xtream' ? requestMetadata(generation, (signal) => xtreamSeriesInfo(p, item.seriesId, signal)) : null);
 }

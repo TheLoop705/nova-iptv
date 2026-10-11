@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
@@ -10,10 +10,12 @@ import { Focusable } from '../components/Focusable';
 import { Logo, Poster } from '../components/Logo';
 import { Icon } from '../components/Icon';
 import { programAt } from '../services/epg';
-import { compactTitle, matchScore, queryWords } from '../services/searchMatch';
+import { searchCatalog, type SearchHit } from '../services/catalogSearch';
 import { speechAvailable, startListening } from '../services/speech';
-import type { SeriesItem, VodItem } from '../types';
 import { RemoteKeys } from '../../modules/remote-keys';
+import { useBrowseSession } from '../utils/browseSession';
+import { HoverTitle } from '../components/HoverTitle';
+import { SectionStatus } from '../components/SectionStatus';
 
 interface Result {
   key: string;
@@ -21,55 +23,109 @@ interface Result {
   title: string;
   subtitle?: string;
   image?: string;
+  /** channels show what's on now, read by the row so guide data arriving doesn't redo the search */
+  channelId?: string;
   run: () => void;
 }
 
 export function SearchScreen() {
   const { s, mode } = useLayout();
   const tv = mode === 'tv';
-  const k = tv ? s : (n: number) => n * 1.1;
+  // stable, so the memoized result rows only redraw when their own focus changes
+  const k = useMemo(() => (tv ? s : (n: number) => n * 1.1), [tv, s]);
   const channels = useLibrary((st) => st.channels);
+  const playlistId = useLibrary((st) => st.playlistId);
+  const { saved, remember, update } = useBrowseSession<{ q: string; zone: 'input' | 'results' | 'retry'; idx: number; key?: string; nonce: number; offset: number }>(playlistId, 'search');
+  const libraryReady = useLibrary((st) => st.catalogStatus === 'ready');
   const movies = useLibrary((st) => st.movies);
   const series = useLibrary((st) => st.series);
   const pid = useLibrary((st) => st.playlistId);
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
-  const epg = useLibrary((st) => st.epg);
   const vodAll = useLibrary((st) => st.vodStatus.all);
   const loadAllVod = useLibrary((st) => st.loadAllVod);
   const menuFocused = useUI((st) => st.menuFocused);
   const detail = useUI((st) => st.detail);
+  const sheetOpen = useUI((st) => !!st.sheet);
+  const fullscreen = usePlayer((st) => st.fullscreen && !!st.item);
   const setDetail = useUI((st) => st.setDetail);
   const playChannel = usePlayer((st) => st.playChannel);
   const searchNonce = useUI((st) => st.searchNonce);
   const keyMode = useKeyMode();
 
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(saved?.q ?? '');
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const stopVoice = useRef<(() => void) | null>(null);
   const canListen = useMemo(() => speechAvailable(), []);
-  const [zone, setZone] = useState<'input' | 'results'>('input');
-  const [idx, setIdx] = useState(0);
+  const [zone, setZone] = useState<'input' | 'results' | 'retry'>(saved?.zone ?? 'input');
+  const [idx, setIdx] = useState(saved?.idx ?? 0);
+  const restoreKey = useRef(saved?.key);
+  const offset = useRef(saved?.offset ?? 0);
   const inputRef = useRef<TextInput>(null);
   const listRef = useRef<FlatList<Result>>(null);
+  const keyboardTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const rowH = tv ? s(50) : 64;
 
+  // Full catalogs load only when a query needs them; matching runs in cancellable slices.
   useEffect(() => {
-    if (q.trim().length >= 2) void loadAllVod();
-  }, [q, loadAllVod]);
-  // channel results show what's on now
-  useEffect(() => useLibrary.getState().wantEpg(), []);
+    if (!libraryReady || q.trim().length < 2) return;
+    const timer = setTimeout(() => void loadAllVod(), 180);
+    return () => clearTimeout(timer);
+  }, [q, playlistId, libraryReady, loadAllVod]);
+  // Live data is lazy; channel rows subscribe separately to their programme.
+  useEffect(() => {
+    useLibrary.getState().wantChannels();
+    useLibrary.getState().wantEpg();
+  }, [playlistId]);
+
+  useEffect(() => {
+    setHits([]);
+    if (q.trim().length < 2) {
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = setTimeout(() => {
+      void searchCatalog(q, { channels, movies, series }, controller.signal)
+        .then((next) => {
+          if (!controller.signal.aborted) {
+            setHits(next);
+            setSearching(false);
+          }
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            setSearching(false);
+            console.warn('Search failed', error);
+          }
+        });
+    }, 180);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q, channels, movies, series]);
 
   // Voice-search shortcut (hold Menu / Search key / "/") and remote users: open the keyboard right away.
   // On Fire TV the open keyboard is what lets the remote's mic button dictate into the field.
   const focusInput = () => {
     setZone('input');
-    setTimeout(() => inputRef.current?.focus(), 120);
+    const schedule = (run: () => void, ms: number) => {
+      const timer = setTimeout(() => {
+        keyboardTimers.current.delete(timer);
+        run();
+      }, ms);
+      keyboardTimers.current.add(timer);
+    };
+    schedule(() => inputRef.current?.focus(), 120);
     // Focusing alone doesn't raise the Android TV keyboard, so ask for it explicitly — once now,
     // and again after the shortcut key (held Menu) has been released.
     if (Platform.OS === 'android') {
       for (const ms of [300, 900]) {
-        setTimeout(() => {
+        schedule(() => {
           inputRef.current?.focus();
           RemoteKeys?.showKeyboard().catch(() => {});
         }, ms);
@@ -78,15 +134,19 @@ export function SearchScreen() {
   };
   useEffect(() => {
     // Shortcut = new search: clear the old query so dictation doesn't append to it
-    if (searchNonce > 0) {
+    if (searchNonce > (saved?.nonce ?? 0)) {
       setQ('');
       focusInput();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchNonce]);
   useEffect(() => {
-    if (Platform.isTV || keyMode || Platform.OS === 'web') focusInput();
-    return () => stopVoice.current?.();
+    if ((!saved?.q || saved.zone === 'input') && (Platform.isTV || keyMode || Platform.OS === 'web')) focusInput();
+    return () => {
+      stopVoice.current?.();
+      keyboardTimers.current.forEach(clearTimeout);
+      keyboardTimers.current.clear();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -108,84 +168,76 @@ export function SearchScreen() {
     );
   };
 
-  const results = useMemo<Result[]>(() => {
-    const words = queryWords(q.trim());
-    if (q.trim().length < 2 || !words.length) return [];
-    const now = Date.now();
-    // `dup`: providers list the same channel/movie in several categories under different IDs
-    const scored: { r: Result; score: number; kind: number; dup: string }[] = [];
-    let cCount = 0;
-    for (const c of channels) {
-      const title = compactTitle(c.name);
-      const score = matchScore(words, title);
-      if (!score) continue;
-      const p = programAt(epg[c.id], now);
-      scored.push({
-        score,
-        kind: 0,
-        dup: 'c:' + title,
-        r: {
-          key: 'c' + c.id,
-          type: 'channel',
-          title: c.name,
-          subtitle: p ? `Now: ${p.title}` : c.group,
-          image: c.logo,
-          run: () => playChannel(c.id, { groupId: 'all', fullscreen: true }),
-        },
-      });
-      if (++cCount >= 150) break;
+  const lastEpisode = useMemo(() => {
+    const watched = new Map<string, string>();
+    for (const entry of history ?? []) {
+      if (entry.kind === 'episode' && !watched.has(entry.series.id)) watched.set(entry.series.id, `Last watched S${entry.episode.season} E${entry.episode.episode}`);
     }
-    const seen = new Set<string>();
-    let mCount = 0;
-    for (const list of Object.values(movies)) {
-      for (const m of list as VodItem[]) {
-        if (mCount >= 120 || seen.has(m.id)) continue;
-        const title = compactTitle(m.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
-        seen.add(m.id);
-        mCount++;
-        scored.push({ score, kind: 1, dup: `m:${title}:${m.year ?? ''}`, r: { key: 'm' + m.id, type: 'movie', title: m.name, subtitle: ['Movie', m.year].filter(Boolean).join(' · '), image: m.poster, run: () => setDetail({ kind: 'movie', item: m }) } });
-      }
+    return watched;
+  }, [history]);
+  const results = useMemo<Result[]>(() => hits.map((hit) => {
+    const item = hit.item;
+    if (hit.kind === 'channel') {
+      const channel = hit.item;
+      return {
+        key: 'c' + channel.id, type: 'channel', title: channel.name,
+        subtitle: channel.group, image: channel.logo, channelId: channel.id,
+        run: () => playChannel(channel.id, { groupId: 'all', fullscreen: true }),
+      };
     }
-    // Series you've started say where you are; opening one lands on that episode
-    const lastEpisode = new Map<string, string>();
-    for (const h of history ?? []) if (h.kind === 'episode' && !lastEpisode.has(h.series.id)) lastEpisode.set(h.series.id, `Last watched S${h.episode.season} E${h.episode.episode}`);
-    let sCount = 0;
-    for (const list of Object.values(series)) {
-      for (const sr of list as SeriesItem[]) {
-        if (sCount >= 120 || seen.has(sr.id)) continue;
-        const title = compactTitle(sr.name);
-        const score = matchScore(words, title);
-        if (!score) continue;
-        seen.add(sr.id);
-        sCount++;
-        scored.push({ score, kind: 2, dup: `s:${title}:${sr.year ?? ''}`, r: { key: 's' + sr.id, type: 'series', title: sr.name, subtitle: ['Series', lastEpisode.get(sr.id) ?? sr.year].filter(Boolean).join(' · '), image: sr.poster, run: () => setDetail({ kind: 'series', item: sr }) } });
-      }
-    }
-    // Best matches first; channels before movies before series on ties
-    scored.sort((a, b) => b.score - a.score || a.kind - b.kind);
-    // One result per title (and year): the best-ranked copy wins
-    const unique = new Set<string>();
-    return scored.filter((x) => !unique.has(x.dup) && unique.add(x.dup)).map((x) => x.r);
-  }, [q, channels, movies, series, epg, history, playChannel, setDetail]);
-
-  useEffect(() => setIdx(0), [q]);
+    return {
+      key: (hit.kind === 'movie' ? 'm' : 's') + item.id,
+      type: hit.kind, title: item.name, image: hit.item.poster,
+      subtitle: [hit.kind === 'movie' ? 'Movie' : 'Series', hit.kind === 'series' ? lastEpisode.get(hit.item.id) ?? hit.item.year : hit.item.year].filter(Boolean).join(' · '),
+      run: () => setDetail(hit.kind === 'movie' ? { kind: 'movie', item: hit.item } : { kind: 'series', item: hit.item }),
+    };
+  }), [hits, lastEpisode, playChannel, setDetail]);
+  const previousQuery = useRef(q);
+  useEffect(() => {
+    if (previousQuery.current === q) return;
+    previousQuery.current = q;
+    restoreKey.current = undefined;
+    offset.current = 0;
+    setIdx(0);
+  }, [q]);
+  useEffect(() => {
+    if (!results.length) return;
+    const index = restoreKey.current ? results.findIndex((r) => r.key === restoreKey.current) : -1;
+    if (index >= 0) restoreKey.current = undefined;
+    setIdx((current) => index >= 0 ? index : Math.max(0, Math.min(current, results.length - 1)));
+  }, [results]);
+  remember({ q, zone, idx, key: results[idx]?.key ?? restoreKey.current, nonce: searchNonce, offset: offset.current });
+  const restoredScroll = useRef(false);
+  useEffect(() => {
+    if (!results.length || restoredScroll.current || !saved?.offset) return;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToOffset({ offset: saved.offset, animated: false });
+      restoredScroll.current = true;
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [results.length, saved]);
   useEffect(() => {
     if (zone === 'results') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 3) * rowH), animated: true });
   }, [idx, zone, rowH]);
 
   const onKey = (e: KeyEvt): boolean | void => {
     if (e.key === 'search') return focusInput();
+    if (zone === 'retry') {
+      if (e.key === 'select') { void loadAllVod(); return setZone(results.length ? 'results' : 'input'); }
+      if (e.key === 'down' && results.length) return setZone('results');
+      if (e.key === 'up' || e.key === 'back') return setZone('input');
+      return false;
+    }
     if (zone === 'input') {
       if (e.key === 'select') return inputRef.current?.focus();
+      if (e.key === 'down' && vodAll === 'error') return setZone('retry');
       if (e.key === 'down' && results.length) return setZone('results');
       if (e.key === 'left' || e.key === 'back') return false;
       return;
     }
     switch (e.key) {
       case 'up':
-        return idx === 0 ? setZone('input') : setIdx(idx - 1);
+        return idx === 0 ? setZone(vodAll === 'error' ? 'retry' : 'input') : setIdx(idx - 1);
       case 'down':
         return setIdx(Math.min(results.length - 1, idx + 1));
       case 'select':
@@ -198,7 +250,18 @@ export function SearchScreen() {
         return;
     }
   };
-  useKeys(onKey, !menuFocused && !detail);
+  useKeys(onKey, !menuFocused && !detail && !sheetOpen && !fullscreen);
+
+  const focusIdx = zone === 'results' ? idx : -1;
+  const openResult = useCallback((result: Result, index: number) => {
+    setIdx(index);
+    setZone('results');
+    result.run();
+  }, []);
+  const renderItem = useCallback(
+    ({ item, index }: { item: Result; index: number }) => <ResultRow r={item} index={index} onOpen={openResult} focused={index === focusIdx} rowH={rowH} k={k} />,
+    [focusIdx, rowH, k, openResult]
+  );
 
   return (
     <View style={{ flex: 1, padding: tv ? s(22) : 16 }}>
@@ -225,7 +288,7 @@ export function SearchScreen() {
           style={{ flex: 1, color: colors.text, fontSize: k(14), marginLeft: k(8), height: '100%', fontFamily: fonts.regular, outlineStyle: 'none' } as any}
           testID="search-input"
         />
-        {vodAll === 'loading' ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+        {vodAll === 'loading' || searching ? <ActivityIndicator size="small" color={colors.accent} /> : null}
         {canListen ? (
           <Pressable
             focusable={false}
@@ -240,8 +303,9 @@ export function SearchScreen() {
       </Focusable>
       {listening ? <Text style={{ color: colors.live, fontSize: k(12), marginTop: k(8), fontWeight: '600' }}>Listening… say a channel, movie or show</Text> : null}
       {voiceError ? <Text style={{ color: colors.star, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
+      {vodAll === 'error' ? <SectionStatus label="Some search results unavailable" onRetry={() => { void loadAllVod(); }} focused={zone === 'retry'} testID="search-catalog-status" /> : null}
 
-      {q.trim().length >= 2 && !results.length ? (
+      {q.trim().length >= 2 && !results.length && !searching && vodAll !== 'loading' && vodAll !== 'error' ? (
         <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{q.trim()}”.</Text>
       ) : null}
       {q.trim().length < 2 && !listening ? <VoiceHint k={k} canListen={canListen} /> : null}
@@ -253,40 +317,61 @@ export function SearchScreen() {
         style={{ marginTop: k(12) }}
         keyboardShouldPersistTaps="handled"
         getItemLayout={(_d, i) => ({ length: rowH, offset: rowH * i, index: i })}
-        renderItem={({ item: r, index }) => (
-          <Focusable
-            focused={zone === 'results' && index === idx}
-            onPress={r.run}
-            style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
-            focusStyle={{ backgroundColor: colors.focus }}
-          >
-            {({ focused }) => (
-              <>
-                {r.type === 'channel' ? (
-                  <Logo uri={r.image} name={r.title} size={k(26)} />
-                ) : (
-                  <View style={{ width: k(42), alignItems: 'center' }}>
-                    <Poster uri={r.image} name={r.title} width={k(28)} />
-                  </View>
-                )}
-                <View style={{ flex: 1, marginLeft: k(12) }}>
-                  <Text numberOfLines={1} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }}>
-                    {r.title}
-                  </Text>
-                  {r.subtitle ? (
-                    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
-                      {r.subtitle}
-                    </Text>
-                  ) : null}
-                </View>
-                <Icon name={r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={focused ? colors.focusText : colors.muted} />
-              </>
-            )}
-          </Focusable>
-        )}
+        renderItem={renderItem}
+        extraData={renderItem}
+        initialNumToRender={tv ? 10 : 12}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        removeClippedSubviews={Platform.OS === 'android'}
+        onScroll={(e) => { offset.current = e.nativeEvent.contentOffset.y; update({ offset: offset.current }); }}
+        scrollEventThrottle={64}
       />
     </View>
   );
+}
+
+/** One result. Memoized, so moving the focus redraws two rows instead of the whole list. */
+const ResultRow = memo(function ResultRow({ r, index, onOpen, focused, rowH, k }: { r: Result; index: number; onOpen: (r: Result, index: number) => void; focused: boolean; rowH: number; k: (n: number) => number }) {
+  return (
+    <Focusable
+      focused={focused}
+      onPress={() => onOpen(r, index)}
+      style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
+      focusStyle={{ backgroundColor: colors.focus }}
+    >
+      {({ focused: f, hovered }) => (
+        <>
+          {r.type === 'channel' ? (
+            <Logo uri={r.image} name={r.title} size={k(26)} />
+          ) : (
+            <View style={{ width: k(42), alignItems: 'center' }}>
+              <Poster uri={r.image} name={r.title} width={k(28)} />
+            </View>
+          )}
+          <View style={{ flex: 1, marginLeft: k(12) }}>
+            <HoverTitle text={r.title} active={hovered} style={{ color: f ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }} />
+            {r.channelId ? <NowLine channelId={r.channelId} fallback={r.subtitle} focused={f} k={k} /> : r.subtitle ? <Subtitle text={r.subtitle} focused={f} k={k} /> : null}
+          </View>
+          <Icon name={r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={f ? colors.focusText : colors.muted} />
+        </>
+      )}
+    </Focusable>
+  );
+});
+
+function Subtitle({ text, focused, k }: { text: string; focused: boolean; k: (n: number) => number }) {
+  return (
+    <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
+      {text}
+    </Text>
+  );
+}
+
+/** A channel result's "Now: …", once the guide has it (the group until then). */
+function NowLine({ channelId, fallback, focused, k }: { channelId: string; fallback?: string; focused: boolean; k: (n: number) => number }) {
+  const now = useLibrary((st) => programAt(st.epg[channelId], Date.now())?.title);
+  const text = now ? `Now: ${now}` : fallback;
+  return text ? <Subtitle text={text} focused={focused} k={k} /> : null;
 }
 
 /** How to search by voice on this device. */

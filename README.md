@@ -52,6 +52,9 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Favorites, recents, hidden groups, search** across channels, movies and series, with forgiving matching for dictated queries ("n tv" → n-tv, "channel four" → Channel 4, "canal plus" → Canal+).
 - **Voice search**: hold **☰ Menu** on the remote (or press a remote's Search/Assistant key, or `/` on the web) to jump to Search with the keyboard open. On Fire TV, then hold the remote's **mic** button and speak: the Fire TV keyboard types what you say. Amazon reserves the mic button for Alexa, so apps can't receive it directly. On the web there's a mic button (needs HTTPS or localhost); on phones use the keyboard's mic.
 - **Remote-first navigation**: every screen works with a D-pad (Fire TV remote, Android TV remote, keyboard arrows on the web). Touch and mouse work everywhere too.
+- **Pick up where you browsed**: Home's filter and rows, movie/series category and poster, the guide channel/timeline, Search's query/results, and Settings keep their position when you change sections. Positions are kept per playlist for the current app session. Search shortcuts still start a fresh query.
+- **Retry individual sections**: unavailable Home rows, categories, search catalogs and the TV guide show their own Retry control while available content remains usable. On a remote, OK retries a focused failed Home row; Up from the top reaches category/guide retries, and Down from Search's input reaches its retry.
+- **Read long titles**: on the web and Windows, hover a truncated title to scroll it horizontally. It stops when you leave. Reduced-motion users get the full title as a tooltip.
 
 ## Player
 
@@ -97,6 +100,8 @@ npm run mock:xtream    # optional: fake Xtream panel on :8790
 ```
 
 Checks: `npx tsc --noEmit`, `npm run test:updates` (Node 22.18+), and, after Android prebuild, `cd android && ./gradlew :playlist-pairing:testDebugUnitTest :display-mode:testDebugUnitTest`. The pairing tests exercise real HTTP requests for M3U/Xtream submission, validation, single-use codes, expiration, and editor-close cancellation. The display-mode tests cover frame-rate measurement from frame timestamps and the choice of refresh rate.
+
+Performance checks: `npm run test:performance` exercises large guides, catalogs, search, cancellation and caches. `npm run build:perf:web && npm run test:e2e` tests the production web app with a large local provider, real remote navigation and measured responsiveness. [Testing instructions](docs/performance-testing.md) cover private `.env` credentials, Windows, Android TV emulation and physical Fire TV checks. [Performance review](docs/performance-review.md) records the findings, measurements and remaining device coverage.
 
 Keyboard on web: arrows = D-pad, Enter = OK (hold for the long-press menu), Esc/Backspace = Back, `o` = options, `/` or Ctrl+K / ⌘K = search, right-click = context menu, PageUp/PageDown = channel up/down, digits = channel number. In the player (YouTube-style): Space/`k` play-pause, `j`/`l` −/+10 s, `m` mute, `f` fullscreen, `c` subtitles, `<`/`>` speed, `p` picture-in-picture, `+`/`-` volume.
 
@@ -209,4 +214,6 @@ Proxy safety:
 - **Startup**: Nova shows its launch screen until settings are read, then the library it saved last time, and refreshes in the background. Startup loads movies and series only; **Live TV channels load when you open Live TV** (Search loads them too, for its channel results, and so does *Start with last channel*). On Xtream, signing in runs alongside so a wrong password or an expired account is still reported, and each Home row loads its category when it comes near the screen. An M3U playlist is downloaded once and saved in two parts, so starting the app reads only its movies. A playlist loading for the first time shows a loading screen with what's happening ("Downloading playlist… 4.2 MB").
 - **Caches** (IndexedDB on web, JSON files in the app's documents directory on native): the channel list and an M3U playlist's movies (refreshed in the background after 24 h), Xtream movie and series categories and each category's titles (after 12 h; an empty answer from the provider never replaces a saved list), and the guide. *Refresh now* on a playlist re-reads all of them.
 - Guide data loads the first time it's needed (Live TV, a live channel, Search or Settings), not at startup, and is refreshed every 12 h by default (Settings → TV Guide).
+- Large channel/guide caches use small pages. Native installations refresh the previous large cache once after this upgrade to avoid blocking while reading it.
+- Settings displays exact movie/series totals after those catalogs have loaded. Choose **Count movies and series** to calculate them in the background; simply opening Settings does not download both catalogs.
 - The default User-Agent is `Nova/1.0 … ExoPlayerLib/2.19.1`. Some providers require a specific one: set it per playlist or globally in Settings.
