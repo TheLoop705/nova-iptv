@@ -13,6 +13,8 @@ export interface SearchCatalog {
   series: Record<string, SeriesItem[]>;
 }
 
+export type SearchScope = 'all' | SearchHit['kind'];
+
 // Weak keys release their normalized titles when a playlist/catalog is replaced.
 const titles = new WeakMap<object, { name: string; compact: string }>();
 function titleFor(item: { name: string }): string {
@@ -26,7 +28,7 @@ function titleFor(item: { name: string }): string {
 const clock = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 
 /** Search outside React render in short, cancellable slices, keeping only bounded result buckets. */
-export async function searchCatalog(query: string, catalog: SearchCatalog, signal?: AbortSignal): Promise<SearchHit[]> {
+export async function searchCatalog(query: string, catalog: SearchCatalog, signal?: AbortSignal, scope: SearchScope = 'all'): Promise<SearchHit[]> {
   throwIfAborted(signal);
   const words = queryWords(query.trim());
   if (query.trim().length < 2 || !words.length) return [];
@@ -37,6 +39,7 @@ export async function searchCatalog(query: string, catalog: SearchCatalog, signa
   const kinds: SearchHit['kind'][] = ['channel', 'movie', 'series'];
   const ranked: { hit: SearchHit; score: number; kind: number }[] = [];
   for (let kind = 0; kind < kinds.length; kind++) {
+    if (scope !== 'all' && scope !== kinds[kind]) continue;
     const limit = kind === 0 ? 150 : 120;
     const buckets: SearchHit[][] = [[], [], [], []];
     const ids = new Set<string>();

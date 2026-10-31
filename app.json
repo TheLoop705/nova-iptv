@@ -24,13 +24,13 @@
       "buildNumber": "8"
     },
     "android": {
+      "icon": "./assets/nova-android-icon.png",
       "package": "com.theloop705.nova",
       "versionCode": 8,
       "adaptiveIcon": {
-        "backgroundColor": "#1B3A8C",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#2F6BEA",
+        "foregroundImage": "./assets/nova-android-foreground.png",
+        "monochromeImage": "./assets/nova-android-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -72,7 +72,12 @@
           }
         }
       ],
-      "./plugins/withAndroidTV"
+      [
+        "./plugins/withAndroidTV",
+        {
+          "banner": "./assets/tv/nova-banner.png"
+        }
+      ]
     ],
     "scheme": "nova"
   }

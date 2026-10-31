@@ -289,7 +289,7 @@ const WideCard = memo(function WideCard({
             </View>
           ) : null}
           <View style={{ position: 'absolute', left: k(9), right: thumbW + k(8), bottom: k(10) }}>
-            <HoverTitle text={cleanTitle(entry.item.name).title} active={hovered} style={[type('label'), { color: colors.text }]} />
+            <HoverTitle text={cleanTitle(entry.item.name).title} active={hovered || f} style={[type('label'), { color: colors.text }]} />
             {sub ? (
               <Text numberOfLines={1} style={[type('caption'), { color: colors.textDim }]}>
                 {sub}

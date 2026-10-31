@@ -7,6 +7,19 @@ const { searchCatalog } = await appModule('src/services/catalogSearch.ts');
 const empty = { channels: [], movies: {}, series: {} };
 const movie = (id, name) => ({ id, name, categoryId: '1' });
 
+test('a scoped search never visits other catalog types', async () => {
+  for (const scope of ['channel', 'movie', 'series']) {
+    const catalog = {};
+    for (const [kind, key] of [['channel', 'channels'], ['movie', 'movies'], ['series', 'series']]) {
+      Object.defineProperty(catalog, key, { get() {
+        assert.equal(kind, scope, 'unselected catalogs must not be scanned');
+        return kind === 'channel' ? [movie('1', 'Target')] : { '1': [movie('1', 'Target')] };
+      } });
+    }
+    assert.deepEqual((await searchCatalog('Target', catalog, undefined, scope)).map((hit) => hit.kind), [scope]);
+  }
+});
+
 test('search ranks late exact matches and bounds results across an entire category', async () => {
   const items = Array.from({ length: 1000 }, (_, i) => movie(String(i), `Target Film ${i}`));
   items.push(movie('exact', 'Target Film'));
