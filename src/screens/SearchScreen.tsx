@@ -4,13 +4,13 @@ import { colors, fonts, radius, useLayout } from '../theme';
 import { useLibrary } from '../store/library';
 import { useSettings } from '../store/settings';
 import { usePlayer } from '../store/player';
-import { useUI } from '../store/ui';
+import { useUI, type MenuAnchor } from '../store/ui';
 import { useKeyMode, useKeys, type KeyEvt } from '../input/keys';
 import { Focusable } from '../components/Focusable';
 import { Logo, Poster } from '../components/Logo';
 import { Icon } from '../components/Icon';
 import { programAt } from '../services/epg';
-import { searchCatalog, type SearchHit } from '../services/catalogSearch';
+import { searchCatalog, type SearchHit, type SearchScope } from '../services/catalogSearch';
 import { speechAvailable, startListening } from '../services/speech';
 import { RemoteKeys } from '../../modules/remote-keys';
 import { useBrowseSession } from '../utils/browseSession';
@@ -28,6 +28,13 @@ interface Result {
   run: () => void;
 }
 
+const scopes: { id: SearchScope; label: string }[] = [
+  { id: 'all', label: 'All' }, { id: 'movie', label: 'Movies' },
+  { id: 'series', label: 'Series' }, { id: 'channel', label: 'Live TV' },
+];
+const emptyCatalog = { channels: [], movies: {}, series: {} };
+type Zone = 'input' | 'filters' | 'results' | 'retry';
+
 export function SearchScreen() {
   const { s, mode } = useLayout();
   const tv = mode === 'tv';
@@ -35,13 +42,15 @@ export function SearchScreen() {
   const k = useMemo(() => (tv ? s : (n: number) => n * 1.1), [tv, s]);
   const channels = useLibrary((st) => st.channels);
   const playlistId = useLibrary((st) => st.playlistId);
-  const { saved, remember, update } = useBrowseSession<{ q: string; zone: 'input' | 'results' | 'retry'; idx: number; key?: string; nonce: number; offset: number }>(playlistId, 'search');
+  const sharedPlaylist = useSettings((st) => st.playlists.find((p) => p.id === playlistId)?.type === 'm3u');
+  const { saved, remember, update } = useBrowseSession<{ q: string; scope?: SearchScope; zone: Zone; idx: number; key?: string; nonce: number; offset: number }>(playlistId, 'search');
   const libraryReady = useLibrary((st) => st.catalogStatus === 'ready');
   const movies = useLibrary((st) => st.movies);
   const series = useLibrary((st) => st.series);
   const pid = useLibrary((st) => st.playlistId);
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
-  const vodAll = useLibrary((st) => st.vodStatus.all);
+  const vodStatus = useLibrary((st) => st.vodStatus);
+  const channelStatus = useLibrary((st) => st.status);
   const loadAllVod = useLibrary((st) => st.loadAllVod);
   const menuFocused = useUI((st) => st.menuFocused);
   const detail = useUI((st) => st.detail);
@@ -53,13 +62,28 @@ export function SearchScreen() {
   const keyMode = useKeyMode();
 
   const [q, setQ] = useState(saved?.q ?? '');
+  const [scope, setScope] = useState<SearchScope>(saved?.scope ?? 'all');
+  const [filterIdx, setFilterIdx] = useState(() => scopes.findIndex((s) => s.id === (saved?.scope ?? 'all')));
+  const [revision, setRevision] = useState(0);
+  const [searchError, setSearchError] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const needsChannels = scope === 'all' || scope === 'channel';
+  const needsMovies = scope === 'all' || scope === 'movie';
+  const needsSeries = scope === 'all' || scope === 'series';
+  const searchChannels = needsChannels ? channels : emptyCatalog.channels;
+  const searchMovies = needsMovies ? movies : emptyCatalog.movies;
+  const searchSeries = needsSeries ? series : emptyCatalog.series;
+  const loading = ((needsChannels || sharedPlaylist) && (channelStatus === 'loading' || channelStatus === 'idle'))
+    || (needsMovies && vodStatus.allMovies === 'loading') || (needsSeries && vodStatus.allSeries === 'loading');
+  const unavailable = searchError || ((needsChannels || sharedPlaylist) && channelStatus === 'error')
+    || (needsMovies && vodStatus.allMovies === 'error') || (needsSeries && vodStatus.allSeries === 'error');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const stopVoice = useRef<(() => void) | null>(null);
   const canListen = useMemo(() => speechAvailable(), []);
-  const [zone, setZone] = useState<'input' | 'results' | 'retry'>(saved?.zone ?? 'input');
+  const [zone, setZone] = useState<Zone>(saved?.zone ?? 'input');
   const [idx, setIdx] = useState(saved?.idx ?? 0);
   const restoreKey = useRef(saved?.key);
   const offset = useRef(saved?.offset ?? 0);
@@ -71,17 +95,36 @@ export function SearchScreen() {
   // Full catalogs load only when a query needs them; matching runs in cancellable slices.
   useEffect(() => {
     if (!libraryReady || q.trim().length < 2) return;
-    const timer = setTimeout(() => void loadAllVod(), 180);
+    if (scope === 'channel') return;
+    const timer = setTimeout(() => void loadAllVod(scope === 'all' ? undefined : scope), 180);
     return () => clearTimeout(timer);
-  }, [q, playlistId, libraryReady, loadAllVod]);
+  }, [q, scope, playlistId, libraryReady, loadAllVod]);
   // Live data is lazy; channel rows subscribe separately to their programme.
   useEffect(() => {
+    if (!needsChannels) return;
     useLibrary.getState().wantChannels();
     useLibrary.getState().wantEpg();
-  }, [playlistId]);
+  }, [playlistId, needsChannels]);
+
+  const refresh = () => {
+    setRevision((n) => n + 1);
+    if (needsChannels || sharedPlaylist) void useLibrary.getState().loadChannels({ force: true });
+    if (scope !== 'channel') void loadAllVod(scope === 'all' ? undefined : scope, { force: true });
+  };
 
   useEffect(() => {
-    setHits([]);
+    setSlow(false);
+    if (q.trim().length < 2 || (!loading && !searching)) return;
+    const timer = setTimeout(() => setSlow(true), 8000);
+    return () => clearTimeout(timer);
+  }, [q, scope, loading, searching]);
+
+  const searchedQuery = useRef('');
+  useEffect(() => {
+    const identity = scope + ':' + q;
+    if (searchedQuery.current !== identity) setHits([]);
+    searchedQuery.current = identity;
+    setSearchError(false);
     if (q.trim().length < 2) {
       setSearching(false);
       return;
@@ -89,7 +132,7 @@ export function SearchScreen() {
     const controller = new AbortController();
     setSearching(true);
     const timer = setTimeout(() => {
-      void searchCatalog(q, { channels, movies, series }, controller.signal)
+      void searchCatalog(q, { channels: searchChannels, movies: searchMovies, series: searchSeries }, controller.signal, scope)
         .then((next) => {
           if (!controller.signal.aborted) {
             setHits(next);
@@ -99,6 +142,7 @@ export function SearchScreen() {
         .catch((error) => {
           if (!controller.signal.aborted) {
             setSearching(false);
+            setSearchError(true);
             console.warn('Search failed', error);
           }
         });
@@ -107,7 +151,7 @@ export function SearchScreen() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [q, channels, movies, series]);
+  }, [q, scope, revision, searchChannels, searchMovies, searchSeries]);
 
   // Voice-search shortcut (hold Menu / Search key / "/") and remote users: open the keyboard right away.
   // On Fire TV the open keyboard is what lets the remote's mic button dictate into the field.
@@ -192,21 +236,21 @@ export function SearchScreen() {
       run: () => setDetail(hit.kind === 'movie' ? { kind: 'movie', item: hit.item } : { kind: 'series', item: hit.item }),
     };
   }), [hits, lastEpisode, playChannel, setDetail]);
-  const previousQuery = useRef(q);
+  const previousQuery = useRef(q + ':' + scope);
   useEffect(() => {
-    if (previousQuery.current === q) return;
-    previousQuery.current = q;
+    if (previousQuery.current === q + ':' + scope) return;
+    previousQuery.current = q + ':' + scope;
     restoreKey.current = undefined;
     offset.current = 0;
     setIdx(0);
-  }, [q]);
+  }, [q, scope]);
   useEffect(() => {
     if (!results.length) return;
     const index = restoreKey.current ? results.findIndex((r) => r.key === restoreKey.current) : -1;
     if (index >= 0) restoreKey.current = undefined;
     setIdx((current) => index >= 0 ? index : Math.max(0, Math.min(current, results.length - 1)));
   }, [results]);
-  remember({ q, zone, idx, key: results[idx]?.key ?? restoreKey.current, nonce: searchNonce, offset: offset.current });
+  remember({ q, scope, zone, idx, key: results[idx]?.key ?? restoreKey.current, nonce: searchNonce, offset: offset.current });
   const restoredScroll = useRef(false);
   useEffect(() => {
     if (!results.length || restoredScroll.current || !saved?.offset) return;
@@ -220,28 +264,64 @@ export function SearchScreen() {
     if (zone === 'results') listRef.current?.scrollToOffset({ offset: Math.max(0, (idx - 3) * rowH), animated: true });
   }, [idx, zone, rowH]);
 
+  const resultMenu = useCallback((result: Result, anchor?: MenuAnchor) => {
+    const pid = useLibrary.getState().playlistId;
+    if (!pid || !result.channelId) return;
+    const id = result.channelId;
+    const favorite = useSettings.getState().favorites[pid]?.includes(id);
+    useUI.getState().openSheet({
+      title: result.title, subtitle: result.subtitle, anchor,
+      options: [
+        { label: 'Watch', icon: 'play-circle-outline', onSelect: result.run },
+        { label: favorite ? 'Remove from favorites' : 'Add to favorites', icon: favorite ? 'star-off-outline' : 'star-outline',
+          onSelect: () => {
+            useSettings.getState().toggleFavorite(pid, id);
+            useUI.getState().showToast(favorite ? 'Removed from favorites' : 'Added to Live TV → Favorites');
+          } },
+      ],
+    });
+  }, []);
+
+  const chooseFilter = (index: number) => {
+    setFilterIdx(index);
+    setZone('filters');
+    if (index === scopes.length) refresh();
+    else setScope(scopes[index].id);
+  };
+
   const onKey = (e: KeyEvt): boolean | void => {
     if (e.key === 'search') return focusInput();
     if (zone === 'retry') {
-      if (e.key === 'select') { void loadAllVod(); return setZone(results.length ? 'results' : 'input'); }
+      if (e.key === 'select') { refresh(); return setZone(results.length ? 'results' : 'filters'); }
       if (e.key === 'down' && results.length) return setZone('results');
-      if (e.key === 'up' || e.key === 'back') return setZone('input');
+      if (e.key === 'up' || e.key === 'back') return setZone('filters');
       return false;
     }
     if (zone === 'input') {
       if (e.key === 'select') return inputRef.current?.focus();
-      if (e.key === 'down' && vodAll === 'error') return setZone('retry');
-      if (e.key === 'down' && results.length) return setZone('results');
+      if (e.key === 'down') { inputRef.current?.blur(); return setZone('filters'); }
       if (e.key === 'left' || e.key === 'back') return false;
+      return;
+    }
+    if (zone === 'filters') {
+      if (e.key === 'left') { if (filterIdx === 0) return false; return setFilterIdx(filterIdx - 1); }
+      if (e.key === 'right') return setFilterIdx(Math.min(scopes.length, filterIdx + 1));
+      if (e.key === 'select') return chooseFilter(filterIdx);
+      if (e.key === 'up' || e.key === 'back') return setZone('input');
+      if (e.key === 'down') return setZone(unavailable ? 'retry' : results.length ? 'results' : 'filters');
       return;
     }
     switch (e.key) {
       case 'up':
-        return idx === 0 ? setZone(vodAll === 'error' ? 'retry' : 'input') : setIdx(idx - 1);
+        return idx === 0 ? setZone(unavailable ? 'retry' : 'filters') : setIdx(idx - 1);
       case 'down':
         return setIdx(Math.min(results.length - 1, idx + 1));
       case 'select':
+        if (e.long && results[idx]?.channelId) return resultMenu(results[idx]);
         return results[idx]?.run();
+      case 'menu':
+        if (results[idx]?.channelId) return resultMenu(results[idx]);
+        return;
       case 'back':
         return setZone('input');
       case 'left':
@@ -259,8 +339,8 @@ export function SearchScreen() {
     result.run();
   }, []);
   const renderItem = useCallback(
-    ({ item, index }: { item: Result; index: number }) => <ResultRow r={item} index={index} onOpen={openResult} focused={index === focusIdx} rowH={rowH} k={k} />,
-    [focusIdx, rowH, k, openResult]
+    ({ item, index }: { item: Result; index: number }) => <ResultRow r={item} index={index} onOpen={openResult} onMenu={resultMenu} focused={index === focusIdx} rowH={rowH} k={k} />,
+    [focusIdx, rowH, k, openResult, resultMenu]
   );
 
   return (
@@ -278,7 +358,7 @@ export function SearchScreen() {
           ref={inputRef}
           value={q}
           onChangeText={setQ}
-          placeholder="Channels, movies, series…"
+          placeholder={scope === 'all' ? 'Channels, movies, series…' : `Search ${scopes.find((s) => s.id === scope)?.label.toLowerCase()}…`}
           placeholderTextColor={colors.muted}
           autoCorrect={false}
           autoCapitalize="none"
@@ -288,7 +368,7 @@ export function SearchScreen() {
           style={{ flex: 1, color: colors.text, fontSize: k(14), marginLeft: k(8), height: '100%', fontFamily: fonts.regular, outlineStyle: 'none' } as any}
           testID="search-input"
         />
-        {vodAll === 'loading' || searching ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+        {loading || searching ? <ActivityIndicator size="small" color={colors.accent} /> : null}
         {canListen ? (
           <Pressable
             focusable={false}
@@ -301,11 +381,24 @@ export function SearchScreen() {
           </Pressable>
         ) : null}
       </Focusable>
+      <View style={{ flexDirection: 'row', gap: k(5), marginTop: k(10) }}>
+        {[...scopes, { id: 'refresh', label: 'Refresh' }].map((option, index) => (
+          <Focusable key={option.id} focused={zone === 'filters' && filterIdx === index}
+            onPress={() => chooseFilter(index)} testID={`search-filter-${option.id}`} accessibilityLabel={option.label}
+            style={{ paddingHorizontal: k(9), height: k(32), justifyContent: 'center', borderRadius: k(radius.pill), backgroundColor: scope === option.id ? colors.accentFill : colors.surface2 }}>
+            {({ focused }) => option.id === 'refresh'
+              ? <Icon name="refresh" size={k(16)} color={focused ? colors.focusText : colors.text} />
+              : <Text style={{ fontSize: k(12), fontWeight: '700', color: focused ? colors.focusText : scope === option.id ? colors.onAccent : colors.text }}>{option.label}</Text>}
+          </Focusable>
+        ))}
+      </View>
       {listening ? <Text style={{ color: colors.live, fontSize: k(12), marginTop: k(8), fontWeight: '600' }}>Listening… say a channel, movie or show</Text> : null}
       {voiceError ? <Text style={{ color: colors.star, fontSize: k(12), marginTop: k(8) }}>{voiceError}</Text> : null}
-      {vodAll === 'error' ? <SectionStatus label="Some search results unavailable" onRetry={() => { void loadAllVod(); }} focused={zone === 'retry'} testID="search-catalog-status" /> : null}
+      {unavailable ? <SectionStatus label="Some search results unavailable" onRetry={refresh} focused={zone === 'retry'} testID="search-catalog-status" /> : null}
+      {slow ? <Text style={{ color: colors.textDim, fontSize: k(12), marginTop: k(8) }}>Still searching… try one type to load less data. Available results appear below.</Text> : null}
+      {scope === 'channel' ? <Text style={{ color: colors.textDim, fontSize: k(12), marginTop: k(8) }}>Menu or hold OK on a channel to add it to Live TV → Favorites.</Text> : null}
 
-      {q.trim().length >= 2 && !results.length && !searching && vodAll !== 'loading' && vodAll !== 'error' ? (
+      {q.trim().length >= 2 && !results.length && !searching && !loading && !unavailable ? (
         <Text style={{ color: colors.muted, fontSize: k(13), marginTop: k(20) }}>No results for “{q.trim()}”.</Text>
       ) : null}
       {q.trim().length < 2 && !listening ? <VoiceHint k={k} canListen={canListen} /> : null}
@@ -331,11 +424,15 @@ export function SearchScreen() {
 }
 
 /** One result. Memoized, so moving the focus redraws two rows instead of the whole list. */
-const ResultRow = memo(function ResultRow({ r, index, onOpen, focused, rowH, k }: { r: Result; index: number; onOpen: (r: Result, index: number) => void; focused: boolean; rowH: number; k: (n: number) => number }) {
+const ResultRow = memo(function ResultRow({ r, index, onOpen, onMenu, focused, rowH, k }: { r: Result; index: number; onOpen: (r: Result, index: number) => void; onMenu: (r: Result, anchor?: MenuAnchor) => void; focused: boolean; rowH: number; k: (n: number) => number }) {
+  const pid = useLibrary((s) => s.playlistId);
+  const favorite = useSettings((s) => !!(pid && r.channelId && s.favorites[pid]?.includes(r.channelId)));
   return (
     <Focusable
       focused={focused}
       onPress={() => onOpen(r, index)}
+      onLongPress={r.channelId ? () => onMenu(r) : undefined}
+      onContextMenu={r.channelId ? (anchor) => onMenu(r, anchor) : undefined}
       style={{ height: rowH - k(4), marginBottom: k(4), borderRadius: k(radius.md), flexDirection: 'row', alignItems: 'center', paddingHorizontal: k(10), backgroundColor: colors.surface }}
       focusStyle={{ backgroundColor: colors.focus }}
     >
@@ -349,10 +446,10 @@ const ResultRow = memo(function ResultRow({ r, index, onOpen, focused, rowH, k }
             </View>
           )}
           <View style={{ flex: 1, marginLeft: k(12) }}>
-            <HoverTitle text={r.title} active={hovered} style={{ color: f ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }} />
+            <HoverTitle text={r.title} active={hovered || f} style={{ color: f ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(13) }} />
             {r.channelId ? <NowLine channelId={r.channelId} fallback={r.subtitle} focused={f} k={k} /> : r.subtitle ? <Subtitle text={r.subtitle} focused={f} k={k} /> : null}
           </View>
-          <Icon name={r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={f ? colors.focusText : colors.muted} />
+          <Icon name={favorite ? 'star' : r.type === 'channel' ? 'television-classic' : r.type === 'movie' ? 'movie-open-outline' : 'television-play'} size={k(16)} color={f ? colors.focusText : favorite ? colors.star : colors.muted} />
         </>
       )}
     </Focusable>

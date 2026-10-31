@@ -54,7 +54,9 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Remote-first navigation**: every screen works with a D-pad (Fire TV remote, Android TV remote, keyboard arrows on the web). Touch and mouse work everywhere too.
 - **Pick up where you browsed**: Home's filter and rows, movie/series category and poster, the guide channel/timeline, Search's query/results, and Settings keep their position when you change sections. Positions are kept per playlist for the current app session. Search shortcuts still start a fresh query.
 - **Retry individual sections**: unavailable Home rows, categories, search catalogs and the TV guide show their own Retry control while available content remains usable. On a remote, OK retries a focused failed Home row; Up from the top reaches category/guide retries, and Down from Search's input reaches its retry.
-- **Read long titles**: on the web and Windows, hover a truncated title to scroll it horizontally. It stops when you leave. Reduced-motion users get the full title as a tooltip.
+- **Search by type**: choose All, Movies, Series or Live TV. Movies and Series download only their own full catalog; Live TV needs neither. Failed full catalogs retry once automatically, and damaged cached pages fall back to the provider. The refresh arrow reloads the selected types while keeping usable data. On a remote, Down from the input reaches the filters, Left/Right chooses a button, OK applies it, and Down reaches results.
+- **Your channel shortlist**: Menu / hold OK on a channel in Search or Live TV → Add to favorites. Your channels appear together in **Live TV → Favorites**, above the provider categories. Search → Live TV shows a star beside saved channels; the same menu removes them. Favorites are kept per playlist.
+- **Read long titles**: focus a truncated title with the TV remote, or hover on web and Windows, to scroll it horizontally. Moving away resets it. Reduced-motion settings disable scrolling; browsers show the full title as a tooltip.
 
 ## Player
 

@@ -71,18 +71,80 @@ test('full listings coalesce, retain a successful half and retry only a failed h
   seed();
   let movies = 0, seriesCalls = 0;
   globalThis.__catalogApi.xtreamMovies = async () => { movies++; await pause(5); return [movie(), movie('v1', '2')]; };
-  globalThis.__catalogApi.xtreamSeries = async () => { if (++seriesCalls === 1) throw Error('Unavailable'); return [series]; };
+  globalThis.__catalogApi.xtreamSeries = async () => { if (++seriesCalls <= 2) throw Error('Unavailable'); return [series]; };
   await Promise.all([useLibrary.getState().loadAllVod(), useLibrary.getState().loadAllVod()]);
   assert.equal(movies, 1);
-  assert.equal(seriesCalls, 1);
+  assert.equal(seriesCalls, 2, 'one automatic retry before showing an error');
   assert.equal(useLibrary.getState().movieCount, 1);
   assert.equal(useLibrary.getState().vodAllLoaded, false);
   assert.equal(useLibrary.getState().vodStatus.all, 'error');
   await useLibrary.getState().loadAllVod();
   assert.equal(movies, 1);
-  assert.equal(seriesCalls, 2);
+  assert.equal(seriesCalls, 3);
   assert.equal(useLibrary.getState().seriesCount, 1);
   assert.equal(useLibrary.getState().vodAllLoaded, true);
+});
+
+test('scoped search loads share requests with All and automatically recover a failed kind', async () => {
+  seed();
+  let movies = 0, shows = 0;
+  globalThis.__catalogApi.xtreamMovies = async () => { movies++; await pause(5); return [movie()]; };
+  globalThis.__catalogApi.xtreamSeries = async () => { if (++shows === 1) throw Error('Temporary failure'); return [series]; };
+  await Promise.all([useLibrary.getState().loadAllVod('movie'), useLibrary.getState().loadAllVod('movie')]);
+  assert.equal(movies, 1);
+  assert.equal(shows, 0, 'Movies must not fetch the series catalog');
+  await Promise.all([useLibrary.getState().loadAllVod(), useLibrary.getState().loadAllVod('series')]);
+  assert.equal(movies, 1);
+  assert.equal(shows, 2);
+  assert.equal(useLibrary.getState().vodStatus.allSeries, 'ready');
+  assert.equal(useLibrary.getState().vodAllLoaded, true);
+});
+
+test('unreadable catalog cache falls back to the provider and a scoped refresh keeps other data', async () => {
+  seed();
+  const originalRead = globalThis.__catalogStorage.getItem;
+  let movies = 0, shows = 0;
+  globalThis.__catalogApi.xtreamMovies = async () => [movie('v' + ++movies)];
+  globalThis.__catalogApi.xtreamSeries = async () => { shows++; return [series]; };
+  globalThis.__catalogStorage.getItem = async (key) => {
+    if (key === 'vod:a:allMovies') throw Error('Corrupt page');
+    return originalRead(key);
+  };
+  try { await useLibrary.getState().loadAllVod(); }
+  finally { globalThis.__catalogStorage.getItem = originalRead; }
+  assert.equal(useLibrary.getState().movieCount, 1);
+  assert.equal(movies, 1);
+  assert.equal(useLibrary.getState().vodStatus.allMovies, 'ready');
+  const seriesBefore = useLibrary.getState().series;
+  await useLibrary.getState().loadAllVod('movie', { force: true });
+  assert.equal(movies, 2);
+  assert.equal(shows, 1);
+  assert.equal(useLibrary.getState().series, seriesBefore);
+  assert.equal(useLibrary.getState().movies['1'][0].id, 'v2');
+});
+
+test('a failed forced catalog refresh preserves existing usable results and stops retrying', async () => {
+  seed();
+  globalThis.__catalogApi.xtreamMovies = async () => [movie()];
+  await useLibrary.getState().loadAllVod('movie');
+  const before = useLibrary.getState().movies;
+  let calls = 0;
+  globalThis.__catalogApi.xtreamMovies = async () => { calls++; throw Error('Offline'); };
+  await useLibrary.getState().loadAllVod('movie', { force: true });
+  assert.equal(calls, 2);
+  assert.equal(useLibrary.getState().vodStatus.allMovies, 'error');
+  assert.equal(useLibrary.getState().movies, before);
+});
+
+test('refreshing an M3U playlist refreshes its movie search data as well as channels', async () => {
+  const p = { id: 'file', name: 'Import', type: 'm3u', inline: true, createdAt: 1 };
+  globalThis.__catalogSettings.playlists = [p];
+  const playlist = (title) => '#EXTM3U\n#EXTINF:-1 group-title="Live",Channel\nhttps://example.test/live.ts\n#EXTINF:-1 group-title="Movies",' + title + '\nhttps://example.test/movie.mp4';
+  storage.set('m3u:file', playlist('Old Movie'));
+  await useLibrary.getState().load(p);
+  storage.set('m3u:file', playlist('New Movie'));
+  await useLibrary.getState().loadChannels({ force: true });
+  assert.equal(Object.values(useLibrary.getState().movies).flat()[0].name, 'New Movie');
 });
 
 test('series becomes usable while a parallel full movie listing is still pending', async () => {

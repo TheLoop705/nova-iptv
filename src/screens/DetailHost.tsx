@@ -415,7 +415,7 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           {here ? <Badge label={resume.next ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
-                          <HoverTitle text={e.title} active={hovered} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
+                          <HoverTitle text={e.title} active={hovered || focused} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
                         </View>
                         {e.plot ? (
                           <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>

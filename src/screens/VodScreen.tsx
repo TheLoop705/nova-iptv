@@ -332,7 +332,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
                         style={{ marginRight: s(7) }}
                       />
                     ) : null}
-                    <HoverTitle text={c.name} active={hovered} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }} />
+                    <HoverTitle text={c.name} active={hovered || focused} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }} />
                   </>
                 )}
               </Focusable>

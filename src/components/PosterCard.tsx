@@ -73,7 +73,7 @@ export const PosterCard = React.memo(function PosterCard({
             ) : null}
           </View>
           {bare ? null : (
-            <HoverTitle text={item.name} active={hovered} containerStyle={{ marginTop: tv ? s(6) : 6 }}
+            <HoverTitle text={item.name} active={hovered || f} containerStyle={{ marginTop: tv ? s(6) : 6 }}
               style={{ color: f || hovered ? colors.text : colors.textDim, fontSize: tv ? s(11.5) : 13, fontWeight: f ? '700' : '600' }} />
           )}
           {sub && !bare ? (

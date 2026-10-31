@@ -79,7 +79,7 @@ interface LibraryState {
   loadSeries: (categoryId: string) => Promise<void>;
   loadShortEpg: (channelId: string) => Promise<void>;
   /** Xtream: fetch every movie and series once (used by search) */
-  loadAllVod: () => Promise<void>;
+  loadAllVod: (kind?: 'movie' | 'series', opts?: { force?: boolean }) => Promise<void>;
   vodAllLoaded: boolean;
   reset: () => void;
   clearCache: (playlistId: string, opts?: { removeSource?: boolean }) => Promise<void>;
@@ -216,13 +216,15 @@ async function readVod<T>(p: Playlist, part: string, signal: AbortSignal): Promi
     const key = vodPrefix(p.id) + part;
     const cache = await getItem<VodCache>(key);
     throwIfAborted(signal);
-    if (!cache || !cache.source || !samePlaylistSource(cache.source, p) || !Number.isInteger(cache.pages)) return null;
+    if (!cache || !cache.source || !samePlaylistSource(cache.source, p) || !Number.isInteger(cache.pages)
+      || cache.pages < 0 || typeof cache.token !== 'string' || !Number.isFinite(cache.at)) return null;
     const v: T[] = [];
     const checkpoint = createCheckpoint(signal);
     for (let page = 0; page < cache.pages; page++) {
       const rows = await getItem<T[]>(vodPageKey(key, cache, page));
       throwIfAborted(signal);
       if (!Array.isArray(rows)) return null;
+      if (rows.some((row: any) => !row || typeof row.id !== 'string' || typeof row.name !== 'string')) return null;
       v.push(...rows);
       const pause = checkpoint();
       if (pause) await pause;
@@ -261,8 +263,12 @@ async function writeVod<T>(p: Playlist, part: string, list: T[], signal: AbortSi
 }
 
 async function cachedVod<T>(p: Playlist, part: string, signal: AbortSignal, isCurrent: () => boolean,
-  fetch: () => Promise<T[]>, apply: (v: T[]) => Promise<void> | void, ttl = VOD_TTL) {
-  const saved = await readVod<T>(p, part, signal);
+  fetch: () => Promise<T[]>, apply: (v: T[]) => Promise<void> | void, ttl = VOD_TTL, force = false) {
+  // An unreadable persisted page must not prevent recovery from the provider.
+  const saved = force ? null : await readVod<T>(p, part, signal).catch(() => {
+    throwIfAborted(signal);
+    return null;
+  });
   if (!isCurrent()) return;
   if (saved) await apply(saved.v);
   if (saved && Date.now() - saved.at < ttl) return;
@@ -421,7 +427,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         return;
       }
       if (!isCurrent()) return;
-      let data = preparedPlaylist?.generation === generation ? preparedPlaylist.data :
+      let data = !opts.force && preparedPlaylist?.generation === generation ? preparedPlaylist.data :
         opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p);
       if (!isCurrent()) return;
       if (data && (!data.source || !samePlaylistSource(data.source, p!))) {
@@ -437,6 +443,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         if (!isCurrent()) return;
       }
       await applyChannels(data, signal, isCurrent);
+      if (p!.type === 'm3u') await applyMovies(p!, data.movies, signal, isCurrent);
       if (!isCurrent()) return;
       set({ status: 'ready', message: undefined });
       if (epgWanted) {
@@ -656,7 +663,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const p = current();
     const key = 'm:' + categoryId;
     if (!p || p.type !== 'xtream' || Array.isArray(get().movies[categoryId]) || get().moviesAllLoaded) return;
-    if (get().vodStatus.all === 'loading') return get().loadAllVod();
+    if (get().vodStatus.allMovies === 'loading') return get().loadAllVod('movie');
     return catalogRequest(key, async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'loading' } }));
       try {
@@ -673,7 +680,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     const p = current();
     const key = 's:' + categoryId;
     if (!p || p.type !== 'xtream' || Array.isArray(get().series[categoryId]) || get().seriesAllLoaded) return;
-    if (get().vodStatus.all === 'loading') return get().loadAllVod();
+    if (get().vodStatus.allSeries === 'loading') return get().loadAllVod('series');
     return catalogRequest(key, async (signal, isCurrent) => {
       set((s) => ({ vodStatus: { ...s.vodStatus, [key]: 'loading' } }));
       try {
@@ -686,37 +693,48 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     });
   },
 
-  loadAllVod: async () => {
+  loadAllVod: async (kind, opts = {}) => {
     const p = current();
-    if (!p || p.type !== 'xtream' || get().vodAllLoaded) return;
-    return catalogRequest('all', async (signal, isCurrent) => {
-      set((s) => ({ vodStatus: { ...s.vodStatus, all: 'loading' } }));
-      // Two independent streamed lists: a slow movie response must not delay
-      // series results. Parsers discard raw records and grouping yields to input;
-      // cache publication remains serialized by the per-playlist cache lock.
-      const loadMovies = async () => {
-        if (get().moviesAllLoaded) return;
-        try {
-          await cachedVod<VodItem>(p, 'allMovies', signal, isCurrent, () => xtreamMovies(p, undefined, signal), async (list) => {
-            const data = await groupCatalog(list, signal);
-            if (isCurrent()) set({ movies: data.byCategory, movieCount: data.count, moviesAllLoaded: true });
+    if (!p || p.type !== 'xtream') return;
+    const loadKind = (which: 'movie' | 'series') => {
+      const movie = which === 'movie';
+      const part = movie ? 'allMovies' : 'allSeries';
+      if (!opts.force && (movie ? get().moviesAllLoaded : get().seriesAllLoaded)) return Promise.resolve();
+      return catalogRequest(part, async (signal, isCurrent) => {
+        const status = (value: Status) => {
+          if (!isCurrent()) return;
+          set((s) => {
+            const vodStatus = { ...s.vodStatus, [part]: value };
+            const complete = s.moviesAllLoaded && s.seriesAllLoaded;
+            vodStatus.all = vodStatus.allMovies === 'loading' || vodStatus.allSeries === 'loading' ? 'loading'
+              : vodStatus.allMovies === 'error' || vodStatus.allSeries === 'error' ? 'error' : complete ? 'ready' : 'idle';
+            return { vodStatus, vodAllLoaded: complete };
           });
-        } catch { if (!isCurrent()) return; }
-      };
-      const loadSeries = async () => {
-        if (get().seriesAllLoaded) return;
-        try {
-          await cachedVod<SeriesItem>(p, 'allSeries', signal, isCurrent, () => xtreamSeries(p, undefined, signal), async (list) => {
-            const data = await groupCatalog(list, signal);
-            if (isCurrent()) set({ series: data.byCategory, seriesCount: data.count, seriesAllLoaded: true });
-          });
-        } catch { if (!isCurrent()) return; }
-      };
-      await Promise.all([loadMovies(), loadSeries()]);
-      if (!isCurrent()) return;
-      const complete = get().moviesAllLoaded && get().seriesAllLoaded;
-      set((s) => ({ vodAllLoaded: complete, vodStatus: { ...s.vodStatus, all: complete ? 'ready' : 'error' } }));
-    });
+        };
+        status('loading');
+        // Retry a failed listing once, bypassing persisted data. Never discard
+        // usable results or restart another kind's in-flight request.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const apply = async (list: (VodItem | SeriesItem)[]) => {
+              const data = await groupCatalog(list, signal);
+              if (!isCurrent()) return;
+              if (movie) set({ movies: data.byCategory as Record<string, VodItem[]>, movieCount: data.count, moviesAllLoaded: true });
+              else set({ series: data.byCategory as Record<string, SeriesItem[]>, seriesCount: data.count, seriesAllLoaded: true });
+            };
+            await cachedVod<VodItem | SeriesItem>(p, part, signal, isCurrent,
+              () => movie ? xtreamMovies(p, undefined, signal) : xtreamSeries(p, undefined, signal),
+              apply, VOD_TTL, opts.force || attempt > 0);
+            status('ready');
+            return;
+          } catch {
+            if (!isCurrent()) return;
+          }
+        }
+        status('error');
+      });
+    };
+    await Promise.all(kind ? [loadKind(kind)] : [loadKind('movie'), loadKind('series')]);
   },
 
   clearCache: async (playlistId, opts = {}) => {
