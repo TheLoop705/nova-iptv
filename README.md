@@ -47,7 +47,7 @@ All builds are listed on the [Releases](https://github.com/TheLoop705/nova-iptv/
 - **Playlists**: M3U/M3U8 URL, M3U file import, Xtream Codes (live, movies, series, account info). Multiple playlists with fast switching. On Fire TV / Android TV, scan the QR code in **Add playlist** to enter provider details from a phone on the same Wi-Fi network.
 - **XMLTV guides**: streamed and parsed incrementally (gzip supported). The guide URL is auto-detected from `url-tvg`/`x-tvg-url`, or uses Xtream's `xmltv.php`. There's a per-channel fallback via `get_simple_data_table`.
 - **Catch-up**: Xtream `timeshift` and M3U `catchup` types (`default`, `append`, `shift`, `flussonic`, `fs`).
-- **Player**: channel up/down zapping, mini channel list, info overlay with progress and next programme, last-channel recall (`0`), audio/subtitle tracks, aspect modes (fit/zoom/stretch), restart the current show from catch-up.
+- **Player**: channel up/down zapping, mini channel list, info overlay with progress and next programme, last-channel recall (`0`), audio/subtitle tracks, online subtitles for movies and episodes (OpenSubtitles), aspect modes (fit/zoom/stretch), restart the current show from catch-up.
 - **Movies & Series** (Xtream and M3U VOD): category browser, poster grid, detail pages, seasons/episodes, resume positions, favorites, recently watched.
 - **Favorites, recents, hidden groups, search** across channels, movies and series, with forgiving matching for dictated queries ("n tv" → n-tv, "channel four" → Channel 4, "canal plus" → Canal+).
 - **Voice search**: hold **☰ Menu** on the remote (or press a remote's Search/Assistant key, or `/` on the web) to jump to Search with the keyboard open. On Fire TV, then hold the remote's **mic** button and speak: the Fire TV keyboard types what you say. Amazon reserves the mic button for Alexa, so apps can't receive it directly. On the web there's a mic button (needs HTTPS or localhost); on phones use the keyboard's mic.
@@ -69,6 +69,14 @@ Each platform follows its own conventions:
 | Controls | D-pad ◀ ▶ and the remote's ⏪ ⏩ rewind / fast-forward (10 s, hold for 30 s then 60 s steps, with a running total on screen), channel keys, number entry, Menu = options | Tap to show/hide, double-tap sides ±10 s, swipe down to close, pinch to fill | Click, double-click fullscreen, volume slider, YouTube keyboard shortcuts; moving the mouse shows the cursor and controls, which hide again when idle |
 
 Everywhere: speed 0.5–2×, audio/subtitle tracks, aspect (fit/zoom/stretch), resume, a **Next episode** button during the credits (OK plays it on TV), an "Up next" countdown at the very end, and live streams that reconnect by themselves (3 attempts with backoff, stall watchdog, reload at the live edge after the app returns from the background). Web also has a manual quality picker (Auto + 1080p/720p/…) and starts muted when the browser blocks autoplay, with "Tap to unmute".
+
+Online subtitles (movies and episodes, like TiviMate):
+
+- **Subtitles → Search online…** in the player looks the title up on [OpenSubtitles](https://www.opensubtitles.com). It searches by the panel's TMDB id when the provider sends one, otherwise by the cleaned-up title and year (provider tags such as `EN -`, `|NL|`, `[4K]` are stripped), and for episodes by season and episode. Results list your subtitle language first, then English, with the download count; *All languages…* widens the search.
+- Nova draws downloaded subtitles itself, so they look the same on ExoPlayer, VLC and the web player. *Subtitle timing* shifts them by up to ±5 s when they run early or late. The menu switches between embedded tracks and the downloaded one; `c` and the remote's captions key cycle through all of them.
+- A downloaded file is kept for its title (the last 30), with its timing. Resuming a movie brings its subtitles back without using another download.
+- **Settings → Subtitles**: language (follows the device language at first), *Turn on subtitles automatically* (an embedded track in that language, else the best download), text size and background.
+- OpenSubtitles needs an API key, free at opensubtitles.com under Profile → API consumers. Enter it in Settings → Subtitles. Without an account a key allows 5 downloads a day; adding your OpenSubtitles username and password raises that to your account's allowance.
 
 Smooth playback:
 
@@ -210,6 +218,8 @@ Proxy safety:
 - Loopback, LAN, link-local/cloud-metadata, CGNAT/Tailscale and other internal addresses are refused by default. The check runs at connect time and on every redirect hop, so DNS tricks and redirects can't get around it. If your IPTV source lives on your own network (e.g. TVHeadend), set `ALLOW_PRIVATE=1`.
 - `ALLOWED_HOSTS=provider.com,cdn.provider.net` restricts the proxy to your provider's hosts (subdomains included).
 - `npm run proxy` (development) binds to 127.0.0.1 with `ALLOW_PRIVATE=1` so the local mock panel works.
+
+Online subtitles on web go through `/api/opensubtitles`, which forwards only OpenSubtitles' search, login and download calls and its subtitle files. Set `OPENSUBTITLES_API_KEY` on the server to give every browser a key without entering one in Settings.
 
 ## Notes
 

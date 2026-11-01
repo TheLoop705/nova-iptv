@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import type { Episode, Playlist, SeriesItem, VodItem } from '../types';
 import { getItem, onRemoteChange, setItem } from '../services/storage';
 import { applyOps, type Doc } from '../utils/docPatch';
+import { languageForLocale } from '../services/subtitleCore';
 
 export interface Prefs {
   clock24: boolean;
@@ -23,7 +24,27 @@ export interface Prefs {
   liveBuffer: 'fast' | 'balanced' | 'smooth';
   /** Android TV / Fire TV: switch the TV's refresh rate to the video's frame rate while watching fullscreen */
   matchFrameRate: boolean;
+  /** OpenSubtitles language code for online subtitles (and the embedded track picked automatically) */
+  subtitleLanguage: string;
+  subtitleSize: 'small' | 'medium' | 'large' | 'xlarge';
+  /** dark box behind downloaded subtitles instead of a shadow only */
+  subtitleBackground: boolean;
+  /** movies/episodes: turn on subtitles in subtitleLanguage by themselves (embedded track, else download one) */
+  subtitleAuto: boolean;
+  /** OpenSubtitles API key; empty = the one built into the app, if any */
+  osApiKey: string;
+  /** optional OpenSubtitles account: a higher daily download allowance */
+  osUsername: string;
+  osPassword: string;
 }
+
+const deviceLocale = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale;
+  } catch {
+    return 'en';
+  }
+})();
 
 export const defaultPrefs: Prefs = {
   clock24: true,
@@ -39,6 +60,13 @@ export const defaultPrefs: Prefs = {
   autoplayNext: true,
   liveBuffer: 'balanced',
   matchFrameRate: true,
+  subtitleLanguage: languageForLocale(deviceLocale),
+  subtitleSize: 'medium',
+  subtitleBackground: false,
+  subtitleAuto: false,
+  osApiKey: '',
+  osUsername: '',
+  osPassword: '',
 };
 
 export type VodFav = { kind: 'movie'; item: VodItem } | { kind: 'series'; item: SeriesItem };

@@ -23,6 +23,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:performance
+      - run: npm run test:subtitles
       - run: npm run test:updates
       - run: npx playwright install --with-deps chromium
       - run: npm run build:perf:web
