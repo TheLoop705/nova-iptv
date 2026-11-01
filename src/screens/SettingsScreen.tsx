@@ -15,12 +15,24 @@ import { installedVersion, openUpdateSheet, updatesSupported, updateSource, useU
 import appJson from '../../app.json';
 import { DisplayMode } from '../../modules/display-mode';
 import { useBrowseSession } from '../utils/browseSession';
+import { languageName, SUBTITLE_LANGUAGES } from '../services/subtitleCore';
+import { builtInKey, resetSession } from '../services/opensubtitles';
 
 const BUFFER_LABELS = {
   fast: { label: 'Fast start', detail: 'Quickest channel switching' },
   balanced: { label: 'Balanced', detail: 'Recommended' },
   smooth: { label: 'Smooth', detail: 'Fewest interruptions on a weak connection' },
 } as const;
+
+const SUB_SIZES = { small: 'Small', medium: 'Medium', large: 'Large', xlarge: 'Extra large' } as const;
+
+/** Text settings edited in the inline field at the top of the list. */
+interface TextEdit {
+  key: 'userAgent' | 'osApiKey' | 'osUsername' | 'osPassword';
+  hint: string;
+  placeholder: string;
+  secure?: boolean;
+}
 
 const hz = (rates: number[]) => rates.map((r) => (Math.abs(r - Math.round(r)) < 0.01 ? Math.round(r) : r.toFixed(2))).join(', ');
 
@@ -73,8 +85,8 @@ export function SettingsScreen() {
   const [idx, setIdx] = useState(saved?.idx ?? 0);
   const scrollOffset = useRef(saved?.offset ?? 0);
   remember({ idx, offset: scrollOffset.current });
-  const [uaEditing, setUaEditing] = useState(false);
-  const uaRef = useRef<TextInput>(null);
+  const [editing, setEditing] = useState<TextEdit | null>(null);
+  const editRef = useRef<TextInput>(null);
   const listRef = useRef<FlatList<Row>>(null);
 
   const active = playlists.find((p) => p.id === activeId) ?? playlists[0];
@@ -306,7 +318,10 @@ export function SettingsScreen() {
     r.push({ kind: 'item', id: 'preview', label: 'Preview in TV guide', icon: 'picture-in-picture-top-right', toggle: true, on: prefs.previewInGuide, run: () => setPrefs({ previewInGuide: !prefs.previewInGuide }) });
     r.push({ kind: 'item', id: 'autostart', label: 'Start with last channel', icon: 'play-box-outline', toggle: true, on: prefs.startWithLastChannel, run: () => setPrefs({ startWithLastChannel: !prefs.startWithLastChannel }) });
     r.push({ kind: 'item', id: 'autonext', label: 'Autoplay next episode', icon: 'skip-next-outline', toggle: true, on: prefs.autoplayNext ?? true, run: () => setPrefs({ autoplayNext: !(prefs.autoplayNext ?? true) }) });
-    r.push({ kind: 'item', id: 'ua', label: 'User-Agent', icon: 'badge-account-horizontal-outline', value: prefs.userAgent ? 'Custom' : 'Default', detail: prefs.userAgent || DEFAULT_UA, run: () => setUaEditing(true) });
+    r.push({
+      kind: 'item', id: 'ua', label: 'User-Agent', icon: 'badge-account-horizontal-outline', value: prefs.userAgent ? 'Custom' : 'Default', detail: prefs.userAgent || DEFAULT_UA,
+      run: () => setEditing({ key: 'userAgent', hint: 'Custom User-Agent (leave empty for default)', placeholder: DEFAULT_UA }),
+    });
     if (Platform.OS === 'ios') {
       const label = { auto: 'Automatic', vlc: 'Always VLC', native: 'Always Apple' } as const;
       r.push({
@@ -326,6 +341,74 @@ export function SettingsScreen() {
               onSelect: () => setPrefs({ iosPlayer: v }),
             })),
           }),
+      });
+    }
+
+    r.push({ kind: 'header', label: 'Subtitles' });
+    const subLang = prefs.subtitleLanguage || 'en';
+    r.push({
+      kind: 'item',
+      id: 'sub-lang',
+      label: 'Subtitle language',
+      icon: 'translate',
+      value: languageName(subLang),
+      detail: 'For online subtitles and the track turned on automatically',
+      run: () =>
+        openSheet({
+          title: 'Subtitle language',
+          options: SUBTITLE_LANGUAGES.map((l) => ({ label: l.name, selected: l.code === subLang, onSelect: () => setPrefs({ subtitleLanguage: l.code }) })),
+        }),
+    });
+    r.push({
+      kind: 'item',
+      id: 'sub-auto',
+      label: 'Turn on subtitles automatically',
+      icon: 'subtitles-outline',
+      toggle: true,
+      on: prefs.subtitleAuto,
+      detail: `Movies and episodes: a ${languageName(subLang)} track, else the best download from OpenSubtitles`,
+      run: () => setPrefs({ subtitleAuto: !prefs.subtitleAuto }),
+    });
+    r.push({
+      kind: 'item',
+      id: 'sub-size',
+      label: 'Text size',
+      icon: 'format-size',
+      value: SUB_SIZES[prefs.subtitleSize ?? 'medium'],
+      detail: 'Downloaded subtitles',
+      run: () =>
+        openSheet({
+          title: 'Subtitle text size',
+          options: (Object.keys(SUB_SIZES) as (keyof typeof SUB_SIZES)[]).map((v) => ({ label: SUB_SIZES[v], selected: (prefs.subtitleSize ?? 'medium') === v, onSelect: () => setPrefs({ subtitleSize: v }) })),
+        }),
+    });
+    r.push({ kind: 'item', id: 'sub-box', label: 'Text background', icon: 'format-color-fill', toggle: true, on: prefs.subtitleBackground, detail: 'A dark box behind the text instead of a shadow', run: () => setPrefs({ subtitleBackground: !prefs.subtitleBackground }) });
+    r.push({
+      kind: 'item',
+      id: 'os-key',
+      label: 'OpenSubtitles API key',
+      icon: 'key-outline',
+      value: prefs.osApiKey ? 'Custom' : builtInKey ? 'Built in' : Platform.OS === 'web' ? 'Server' : 'Not set',
+      detail: 'Free at opensubtitles.com, Profile, API consumers',
+      run: () => setEditing({ key: 'osApiKey', hint: builtInKey ? 'OpenSubtitles API key (leave empty to use the built-in one)' : 'OpenSubtitles API key', placeholder: 'API key' }),
+    });
+    r.push({
+      kind: 'item',
+      id: 'os-user',
+      label: 'OpenSubtitles account',
+      icon: 'account-key-outline',
+      value: prefs.osUsername ? prefs.osUsername : 'Not signed in',
+      detail: 'Optional: more downloads a day than the 5 without an account',
+      run: () => setEditing({ key: 'osUsername', hint: 'OpenSubtitles username (leave empty to sign out)', placeholder: 'Username' }),
+    });
+    if (prefs.osUsername) {
+      r.push({
+        kind: 'item',
+        id: 'os-pass',
+        label: 'OpenSubtitles password',
+        icon: 'lock-outline',
+        value: prefs.osPassword ? 'Saved' : 'Not set',
+        run: () => setEditing({ key: 'osPassword', hint: 'OpenSubtitles password', placeholder: 'Password', secure: true }),
       });
     }
 
@@ -416,13 +499,21 @@ export function SettingsScreen() {
     if (idx >= items.length) setIdx(Math.max(0, items.length - 1));
   }, [items.length, idx]);
   useEffect(() => {
-    if (uaEditing) setTimeout(() => uaRef.current?.focus(), 50);
-  }, [uaEditing]);
+    if (editing) setTimeout(() => editRef.current?.focus(), 50);
+  }, [editing]);
+
+  const saveEdit = (text: string) => {
+    if (!editing) return;
+    const value = editing.key === 'osPassword' ? text : text.trim();
+    setPrefs({ [editing.key]: value } as Partial<Prefs>);
+    if (editing.key.startsWith('os')) resetSession();
+    setEditing(null);
+  };
 
   const onKey = (e: KeyEvt): boolean | void => {
-    if (uaEditing) {
-      if (e.key === 'back') return setUaEditing(false);
-      if (e.key === 'select') return uaRef.current?.focus();
+    if (editing) {
+      if (e.key === 'back') return setEditing(null);
+      if (e.key === 'select') return editRef.current?.focus();
       return;
     }
     switch (e.key) {
@@ -447,21 +538,21 @@ export function SettingsScreen() {
   return (
     <View style={{ flex: 1 }}>
       <Text style={{ color: colors.text, fontSize: tv ? s(22) : 28, fontWeight: '800', letterSpacing: -0.3, fontFamily: fonts.regular, paddingHorizontal: tv ? s(22) : 16, paddingTop: tv ? s(18) : 14, paddingBottom: tv ? s(6) : 4 }}>Settings</Text>
-      {uaEditing ? (
+      {editing ? (
         <View style={{ marginHorizontal: tv ? s(22) : 16, marginBottom: 10, padding: k(12), backgroundColor: colors.surface, borderRadius: k(10), borderWidth: 1, borderColor: colors.border }}>
-          <Text style={{ color: colors.textDim, fontSize: k(11.5), marginBottom: k(6) }}>Custom User-Agent (leave empty for default) — press Enter to save</Text>
+          <Text style={{ color: colors.textDim, fontSize: k(11.5), marginBottom: k(6) }}>{editing.hint} — press Enter to save</Text>
           <TextInput
-            ref={uaRef}
-            defaultValue={prefs.userAgent}
-            placeholder={DEFAULT_UA}
+            key={editing.key}
+            ref={editRef}
+            testID={`settings-edit-${editing.key}`}
+            defaultValue={prefs[editing.key] ?? ''}
+            placeholder={editing.placeholder}
             placeholderTextColor={colors.muted}
             autoCapitalize="none"
             autoCorrect={false}
-            onSubmitEditing={(ev) => {
-              setPrefs({ userAgent: ev.nativeEvent.text.trim() });
-              setUaEditing(false);
-            }}
-            onBlur={() => setUaEditing(false)}
+            secureTextEntry={!!editing.secure}
+            onSubmitEditing={(ev) => saveEdit(ev.nativeEvent.text)}
+            onBlur={() => setEditing(null)}
             style={{ color: colors.text, fontSize: k(13), height: k(38), paddingHorizontal: k(10), backgroundColor: colors.surface2, borderRadius: k(8), fontFamily: fonts.regular, outlineStyle: 'none' } as any}
           />
         </View>

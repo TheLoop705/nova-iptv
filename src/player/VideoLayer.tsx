@@ -8,6 +8,7 @@ import { useVideoRect } from '../utils/hooks';
 import { VideoSurface } from './VideoSurface';
 import { usePlayback } from './playback';
 import { useMediaSession } from './mediaSession';
+import { useSubtitleSession } from './subtitles';
 import { DisplayMode } from '../../modules/display-mode';
 
 const RECONNECT_DELAYS = [2000, 4000, 8000];
@@ -44,6 +45,7 @@ export function VideoLayer() {
   useReturnToLiveEdge();
   useLiveHistory(item);
   useFrameRateMatch(source, nonce);
+  useSubtitleSession(item);
 
   if (!item || !source) return null;
 

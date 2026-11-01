@@ -20,6 +20,8 @@ import { Focusable } from '../components/Focusable';
 import { NextEpisodeButton, PlayerGestures, PlayerNotices, SeekBar, SeekHint, TOUCH_MIN, VolumeSlider } from './PlayerExtras';
 import { SPEEDS } from './playback';
 import { playNextItem } from '../services/vod';
+import { DELAYS, externalLabel, formatDelay, searchOnline, selectEmbedded, setDelay, setExternalOn, useSubtitles } from './subtitles';
+import { SubtitleOverlay } from './SubtitleOverlay';
 import type { Channel } from '../types';
 
 interface Control {
@@ -77,6 +79,7 @@ export function PlayerOverlay() {
   const qualityIndex = usePlayback((st) => st.qualityIndex);
   const autoQuality = usePlayback((st) => st.autoQuality);
   const autoplayNext = useSettings((st) => st.prefs.autoplayNext ?? true);
+  const hasExternalSubs = useSubtitles((st) => !!st.external);
 
   const now = useNow(5000);
   const live = item.kind === 'live';
@@ -252,7 +255,8 @@ export function PlayerOverlay() {
       if (item.kind === 'catchup') list.push({ id: 'golive', icon: 'broadcast', label: 'Live' });
     }
     if (audioTracks.length > 1) list.push({ id: 'audio', icon: 'volume-high', label: 'Audio' });
-    if (subtitleTracks.length) list.push({ id: 'subs', icon: 'subtitles-outline', label: 'Subtitles' });
+    // movies and episodes can always search online
+    if (subtitleTracks.length || hasExternalSubs || item.kind === 'vod') list.push({ id: 'subs', icon: 'subtitles-outline', label: 'Subtitles' });
     list.push({ id: 'fit', icon: 'aspect-ratio', label: FIT_LABEL[fit] });
     if (!live && caps.speed) list.push({ id: 'speed', icon: 'speedometer', label: `${rate}x`, active: rate !== 1 });
     if (caps.quality) {
@@ -263,7 +267,7 @@ export function PlayerOverlay() {
     if (caps.pip) list.push({ id: 'pip', icon: 'picture-in-picture-bottom-right', label: 'PiP' });
     if (caps.fullscreen) list.push({ id: 'fullscreen', icon: 'fullscreen', label: 'Fullscreen' });
     return list;
-  }, [live, isFav, ch, program, now, status, item.kind, prevItem, nextItem, audioTracks.length, subtitleTracks.length, fit, caps, rate, qualities, qualityIndex, autoQuality, muted]);
+  }, [live, isFav, ch, program, now, status, item.kind, prevItem, nextItem, audioTracks.length, subtitleTracks.length, hasExternalSubs, fit, caps, rate, qualities, qualityIndex, autoQuality, muted]);
 
   useEffect(() => {
     if (ctrl >= controls.length) setCtrl(controls.length - 1);
@@ -280,13 +284,28 @@ export function PlayerOverlay() {
       title: 'Audio track',
       options: audioTracks.map((t, i) => ({ label: t.label, selected: i === usePlayback.getState().audioIndex, onSelect: () => cmd.setAudio(i) })),
     });
-  const subsSheet = () =>
+  // Embedded tracks, the downloaded subtitle (one or the other shows), online search and timing
+  const subsSheet = () => {
+    const pb = usePlayback.getState();
+    const sub = useSubtitles.getState();
+    const ext = sub.external;
+    const vod = item.kind === 'vod' ? item : null;
     openSheet({
       title: 'Subtitles',
       options: [
-        { label: 'Off', selected: usePlayback.getState().subtitleIndex < 0, onSelect: () => cmd.setSubtitle(-1) },
-        ...subtitleTracks.map((t, i) => ({ label: t.label, selected: i === usePlayback.getState().subtitleIndex, onSelect: () => cmd.setSubtitle(i) })),
+        { label: 'Off', selected: pb.subtitleIndex < 0 && !sub.on, onSelect: () => selectEmbedded(-1) },
+        ...subtitleTracks.map((t, i) => ({ label: t.label, selected: !sub.on && i === pb.subtitleIndex, onSelect: () => selectEmbedded(i) })),
+        ...(ext ? [{ label: externalLabel(ext), detail: ext.release, selected: sub.on, onSelect: () => setExternalOn(true) }] : []),
+        ...(vod ? [{ label: 'Search online…', icon: 'magnify', detail: sub.busy ? 'Working…' : 'OpenSubtitles', onSelect: () => void searchOnline(vod) }] : []),
+        ...(ext && sub.on ? [{ label: 'Subtitle timing', icon: 'timer-outline', detail: formatDelay(sub.delay), onSelect: timingSheet }] : []),
       ],
+    });
+  };
+  const timingSheet = () =>
+    openSheet({
+      title: 'Subtitle timing',
+      subtitle: 'Later if the text comes before the voice, earlier if it comes after.',
+      options: DELAYS.map((d) => ({ label: formatDelay(d), selected: d === useSubtitles.getState().delay, onSelect: () => setDelay(d) })),
     });
   const fitSheet = () =>
     openSheet({
@@ -317,11 +336,18 @@ export function PlayerOverlay() {
     cmd.setRate(r);
     showToast(r === 1 ? 'Normal speed' : `${r}x speed`);
   };
+  // Off → embedded tracks → the downloaded subtitle → Off
   const cycleCaptions = () => {
-    if (!subtitleTracks.length) return showToast('No subtitles in this stream');
-    const cur = usePlayback.getState().subtitleIndex;
-    const nextIdx = cur + 1 >= subtitleTracks.length ? -1 : cur + 1;
-    cmd.setSubtitle(nextIdx);
+    const sub = useSubtitles.getState();
+    const count = subtitleTracks.length + (sub.external ? 1 : 0);
+    if (!count) return item.kind === 'vod' ? subsSheet() : showToast('No subtitles in this stream');
+    const cur = sub.on ? subtitleTracks.length : usePlayback.getState().subtitleIndex;
+    const nextIdx = cur + 1 >= count ? -1 : cur + 1;
+    if (sub.external && nextIdx === subtitleTracks.length) {
+      setExternalOn(true);
+      return showToast(`Subtitles: ${externalLabel(sub.external)}`);
+    }
+    selectEmbedded(nextIdx);
     showToast(nextIdx < 0 ? 'Subtitles off' : `Subtitles: ${subtitleTracks[nextIdx].label}`);
   };
   const optionsSheet = () =>
@@ -329,7 +355,7 @@ export function PlayerOverlay() {
       title: ch ? ch.name : item.kind === 'vod' ? item.title : 'Options',
       options: [
         ...(audioTracks.length > 1 ? [{ label: 'Audio track', icon: 'volume-high', onSelect: audioSheet }] : []),
-        ...(subtitleTracks.length ? [{ label: 'Subtitles', icon: 'subtitles-outline', onSelect: subsSheet }] : []),
+        ...(subtitleTracks.length || hasExternalSubs || item.kind === 'vod' ? [{ label: 'Subtitles', icon: 'subtitles-outline', onSelect: subsSheet }] : []),
         { label: 'Aspect ratio', icon: 'aspect-ratio', detail: FIT_LABEL[fit], onSelect: fitSheet },
         ...(!live && caps.speed ? [{ label: 'Playback speed', icon: 'speedometer', detail: rate === 1 ? 'Normal' : `${rate}x`, onSelect: speedSheet }] : []),
         ...(caps.quality ? [{ label: 'Quality', icon: 'high-definition-box', onSelect: qualitySheet }] : []),
@@ -523,6 +549,8 @@ export function PlayerOverlay() {
     <View style={StyleSheet.absoluteFill}>
       <Pressable focusable={false} style={StyleSheet.absoluteFill} onPress={toggleByTap} />
       <PlayerGestures controlsVisible={visible} seekable={!live} onTap={toggleByTap} onSwipeDown={exit} onActivity={onMouseMove} />
+      {/* downloaded subtitles, lifted above the controls while they show */}
+      {status !== 'error' ? <SubtitleOverlay bottom={(visible && !listOpen ? k(live ? 150 : 178) : k(34)) + edgeY} side={k(40) + edgeX} /> : null}
 
       {status === 'loading' ? (
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>

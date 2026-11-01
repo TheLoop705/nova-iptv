@@ -53,6 +53,7 @@
     "test:windows": "npm --prefix desktop run smoke",
     "typecheck": "tsc --noEmit",
     "test:updates": "node --test tests/updates.test.mjs",
+    "test:subtitles": "node --import tsx --test tests/subtitles.test.mjs",
     "build:perf:web": "node scripts/build-performance-web.mjs",
     "test:performance": "node --import tsx --test tests/*performance.test.mjs tests/mock-xtream.test.mjs tests/test-env.test.mjs",
     "test:e2e": "playwright test",

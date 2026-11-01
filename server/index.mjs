@@ -20,6 +20,9 @@
 //                 subdomains). When set, every other host is refused.
 //   NOVA_DB       SQLite file for the web app's playlists, favourites and settings
 //                 (default ~/.nova-iptv/nova.db). Contains playlist credentials.
+//   OPENSUBTITLES_API_KEY  optional key for online subtitles, used when the app sends none
+//   OPENSUBTITLES_API_URL  OpenSubtitles API origin (default https://api.opensubtitles.com; tests
+//                 point it at the mock server)
 
 import http from 'node:http';
 import https from 'node:https';
@@ -325,6 +328,93 @@ async function handleProxy(req, res, params) {
   upstream.pipe(z).pipe(res);
 }
 
+// ---- OpenSubtitles ---------------------------------------------------------------------
+
+// The web app can't call OpenSubtitles itself (custom Api-Key/User-Agent headers cross-origin), so
+// these three endpoints and the subtitle files they link to are forwarded. Nothing else: this is
+// not a general-purpose proxy.
+const OS_API = (process.env.OPENSUBTITLES_API_URL || 'https://api.opensubtitles.com').replace(/\/$/, '');
+const OS_KEY = process.env.OPENSUBTITLES_API_KEY || '';
+const OS_ENDPOINTS = { '/subtitles': 'GET', '/download': 'POST', '/login': 'POST' };
+const OS_FILE_HOST = /(^|\.)opensubtitles\.(com|org)$/i;
+const OS_CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-headers': 'content-type, api-key, x-os-token, x-os-ua, x-os-host',
+  'access-control-max-age': '600',
+};
+
+function readBody(req, limit = 65_536) {
+  return new Promise((resolvePromise, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on('end', () => resolvePromise(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+async function handleOpenSubtitles(req, res, pathname, searchParams) {
+  const send = (status, body) => {
+    res.writeHead(status, { ...OS_CORS, 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  const clientUa = String(req.headers['x-os-ua'] || '');
+  const ua = /^Nova IPTV v[\d.]+$/.test(clientUa) ? clientUa : 'Nova IPTV v1.0.0';
+  const controller = new AbortController();
+  res.on('close', () => controller.abort());
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+  const sub = pathname.slice('/api/opensubtitles'.length);
+  try {
+    if (sub === '/file') {
+      let target;
+      try {
+        target = new URL(searchParams.get('url') || '');
+      } catch {
+        return send(400, { message: 'Invalid url' });
+      }
+      const own = new URL(OS_API);
+      const allowed = (target.protocol === 'https:' && OS_FILE_HOST.test(target.hostname)) || target.origin === own.origin;
+      if (!allowed) return send(403, { message: 'Not an OpenSubtitles file' });
+      const up = await fetch(target, { headers: { 'user-agent': ua }, signal });
+      const buf = Buffer.from(await up.arrayBuffer());
+      if (buf.length > 5_000_000) return send(502, { message: 'Subtitle file too large' });
+      res.writeHead(up.status, { ...OS_CORS, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(buf);
+    }
+    const method = OS_ENDPOINTS[sub];
+    if (!method || req.method !== method) return send(404, { message: 'Unknown OpenSubtitles endpoint' });
+    const host = String(req.headers['x-os-host'] || '');
+    const base = /^[a-z0-9-]+\.opensubtitles\.com$/i.test(host) ? `https://${host}` : OS_API;
+    const key = String(req.headers['api-key'] || '') || OS_KEY;
+    if (!key) return send(401, { message: 'No OpenSubtitles API key: add one in Settings, Subtitles' });
+    const headers = { 'api-key': key, 'user-agent': ua, accept: 'application/json' };
+    // the login token travels separately: Authorization may be the Nova server's own BASIC_AUTH
+    const token = String(req.headers['x-os-token'] || '');
+    if (token) headers.authorization = `Bearer ${token}`;
+    let body;
+    if (method === 'POST') {
+      body = await readBody(req);
+      headers['content-type'] = 'application/json';
+    }
+    // forwarded as sent: OpenSubtitles wants its parameters sorted, which the app already does
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const up = await fetch(`${base}/api/v1${sub}${query}`, { method, headers, body, signal });
+    const text = await up.text();
+    res.writeHead(up.status, { ...OS_CORS, 'content-type': up.headers.get('content-type') || 'application/json', 'cache-control': 'no-store' });
+    return res.end(text);
+  } catch (e) {
+    if (controller.signal.aborted) return;
+    return send(502, { message: e?.name === 'TimeoutError' ? 'OpenSubtitles did not answer in time' : "Couldn't reach OpenSubtitles" });
+  }
+}
+
 // ---- saved data ------------------------------------------------------------------------
 
 // Playlists, favourites, progress and settings (`settings`) plus uploaded M3U files (`m3u:<id>`),
@@ -490,7 +580,7 @@ export const server = http.createServer(async (req, res) => {
     }
   }
   if (req.method === 'OPTIONS' && kvKey === null) {
-    res.writeHead(204, CORS);
+    res.writeHead(204, pathname.startsWith('/api/opensubtitles/') ? OS_CORS : CORS);
     return res.end();
   }
   if (!authorized(req) && req.method !== 'OPTIONS') {
@@ -500,6 +590,7 @@ export const server = http.createServer(async (req, res) => {
   try {
     if (kvKey !== null) return await handleKv(req, res, kvKey);
     if (pathname === '/api/proxy') return await handleProxy(req, res, searchParams);
+    if (pathname.startsWith('/api/opensubtitles/')) return await handleOpenSubtitles(req, res, pathname, searchParams);
     if (pathname === '/api/health') {
       res.writeHead(200, { ...CORS, 'content-type': 'application/json' });
       return res.end('{"ok":true}');

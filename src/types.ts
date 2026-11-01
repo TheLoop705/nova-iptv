@@ -101,6 +101,8 @@ export interface SeriesInfo {
   backdrop?: string;
   poster?: string;
   year?: string;
+  /** TMDB id of the show, when the panel knows it (exact online subtitle search) */
+  tmdbId?: string;
   seasons: { season: number; name: string; episodes: Episode[] }[];
 }
 
@@ -114,6 +116,8 @@ export interface MovieInfo {
   backdrop?: string;
   poster?: string;
   year?: string;
+  /** TMDB id, when the panel knows it (exact online subtitle search) */
+  tmdbId?: string;
 }
 
 export interface Group {
@@ -123,6 +127,17 @@ export interface Group {
   virtual?: boolean;
   /** a favourite category: sorted to the top */
   favorite?: boolean;
+}
+
+/** A movie or an episode as OpenSubtitles knows it. */
+export interface MediaInfo {
+  type: 'movie' | 'episode';
+  /** movie or show title as the panel names it (cleaned before searching) */
+  title: string;
+  year?: string;
+  season?: number;
+  episode?: number;
+  tmdbId?: string;
 }
 
 export type PlayItem =
@@ -136,6 +151,8 @@ export type PlayItem =
       url: string;
       poster?: string;
       userAgent?: string;
+      /** what this is, for the online subtitle search */
+      media?: MediaInfo;
       /** next episode of a series, offered by the "Up next" countdown */
       next?: Omit<Extract<PlayItem, { kind: 'vod' }>, 'next' | 'prev'>;
       /** the episode before, for the player's Previous episode */

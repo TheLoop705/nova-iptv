@@ -182,11 +182,18 @@ export async function xtreamSeriesInfo(p: Playlist, seriesId: number, signal?: A
     backdrop,
     poster: info.cover,
     year: info.releaseDate ? String(info.releaseDate).slice(0, 4) : undefined,
+    tmdbId: tmdbOf(info.tmdb_id ?? info.tmdb),
     seasons,
   };
 }
 
 /** History may contain an old URL; credentials always come from the current playlist. */
+/** Panels send TMDB ids as numbers, strings, "" or "0". */
+const tmdbOf = (v: unknown): string | undefined => {
+  const s = v === undefined || v === null ? '' : String(v).trim();
+  return /^\d+$/.test(s) && Number(s) > 0 ? String(Number(s)) : undefined;
+};
+
 export function xtreamEpisodeUrl(p: Playlist, episodeId: string, ext = 'mp4'): string {
   return `${normalizeServer(p.server!)}/series/${encodeURIComponent(p.username!)}/${encodeURIComponent(p.password!)}/${encodeURIComponent(episodeId)}.${ext}`;
 }
@@ -204,6 +211,7 @@ export async function xtreamMovieInfo(p: Playlist, vodId: number, signal?: Abort
     backdrop: arr<string>(info.backdrop_path)[0],
     poster: info.movie_image || info.cover_big,
     year: info.releasedate ? String(info.releasedate).slice(0, 4) : info.year,
+    tmdbId: tmdbOf(info.tmdb_id ?? info.tmdb ?? data?.movie_data?.tmdb_id),
   };
 }
 

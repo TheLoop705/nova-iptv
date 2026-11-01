@@ -1,4 +1,4 @@
-import type { Episode, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } from '../types';
+import type { Episode, MediaInfo, MovieInfo, PlayItem, SeriesInfo, SeriesItem, VodItem } from '../types';
 import { useSettings, watchId } from '../store/settings';
 import { getLibraryGeneration, useLibrary } from '../store/library';
 import { usePlayer } from '../store/player';
@@ -27,6 +27,7 @@ export function playMovie(item: VodItem, fromStart = false) {
   const url = movieUrl(item);
   if (!url) return;
   const key = movieKey(item);
+  const info = peekMovieInfo(item);
   const progress = useSettings.getState().vodProgress[key];
   const pid = useLibrary.getState().playlistId;
   if (pid) {
@@ -34,7 +35,10 @@ export function playMovie(item: VodItem, fromStart = false) {
     useSettings.getState().pushHistory(pid, { kind: 'movie', id: watchId.movie(item.id), item, at: Date.now() });
   }
   usePlayer.getState().playVod(
-    { kind: 'vod', key, title: item.name, subtitle: item.year, url, poster: item.poster, userAgent: activePlaylist()?.userAgent },
+    {
+      kind: 'vod', key, title: item.name, subtitle: item.year, url, poster: item.poster, userAgent: activePlaylist()?.userAgent,
+      media: { type: 'movie', title: item.name, year: item.year ?? info?.year, tmdbId: info?.tmdbId },
+    },
     fromStart ? undefined : progress?.pos
   );
 }
@@ -101,6 +105,8 @@ export function prevEpisode(series: SeriesItem, ep: Episode): Episode | undefine
 
 function episodeItem(series: SeriesItem, ep: Episode) {
   const p = activePlaylist();
+  const info = playingSeries?.series.id === series.id ? playingSeries.info : seriesInfoCache.get(String(series.seriesId));
+  const media: MediaInfo = { type: 'episode', title: series.name, year: series.year ?? info?.year, season: ep.season, episode: ep.episode, tmdbId: info?.tmdbId };
   const item = {
     kind: 'vod' as const,
     key: episodeKey(ep),
@@ -109,6 +115,7 @@ function episodeItem(series: SeriesItem, ep: Episode) {
     url: p?.type === 'xtream' ? xtreamEpisodeUrl(p, ep.id, ep.ext || 'mp4') : ep.url,
     poster: ep.image ?? series.poster,
     userAgent: p?.userAgent,
+    media,
   };
   episodeItemScopes.set(item, syncMetadataScope());
   return item;

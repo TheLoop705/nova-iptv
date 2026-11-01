@@ -41,6 +41,9 @@ jobs:
       - name: Test performance regressions
         run: npm run test:performance
 
+      - name: Test online subtitles
+        run: npm run test:subtitles
+
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:

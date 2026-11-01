@@ -138,9 +138,52 @@ export function createMockPanel(overrides = {}) {
       if (!res.destroyed) res.destroy();
     }
   }
+  // A small OpenSubtitles API double (search, login, download, files) for the online subtitle tests.
+  const subtitleLanguages = { 9001: 'en', 9002: 'de', 9003: 'en' };
+  const srt = (lang) => {
+    let text = '';
+    for (let i = 0; i < 450; i++) {
+      const t = (sec) => `${String(Math.floor(sec / 3600)).padStart(2, '0')}:${String(Math.floor(sec / 60) % 60).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')},000`;
+      // CRLF like most SRT files in the wild
+      const lines = [String(i + 1), `${t(i * 4)} --> ${t(i * 4 + 3)}`, `${lang === 'de' ? 'Deutsche Zeile' : 'Mock line'} ${i + 1}`];
+      if (i % 5 === 0) lines.push('<i>second line</i>');
+      text += lines.join('\r\n') + '\r\n\r\n';
+    }
+    return text;
+  };
+  async function openSubtitles(req, res, u) {
+    count('subtitles');
+    if (u.pathname.startsWith('/os-files/')) {
+      const id = Number(/(\d+)\.srt$/.exec(u.pathname)?.[1]);
+      res.writeHead(200, { 'content-type': 'application/x-subrip; charset=utf-8' });
+      return res.end('\uFEFF' + srt(subtitleLanguages[id] || 'en'));
+    }
+    if (!req.headers['api-key']) return json(res, { message: 'You cannot consume this service' }, 401);
+    if (u.pathname === '/api/v1/login' && req.method === 'POST') return json(res, { token: 'mock-token', base_url: 'api.opensubtitles.com', user: { allowed_downloads: 20 } });
+    if (u.pathname === '/api/v1/download' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) body += c;
+      const id = Number(JSON.parse(body || '{}').file_id);
+      if (!subtitleLanguages[id]) return json(res, { message: 'Invalid file_id' }, 400);
+      return json(res, { link: `http://${req.headers.host}/os-files/${id}.srt`, file_name: `${id}.srt`, requests: 1, remaining: 4, message: '' });
+    }
+    if (u.pathname === '/api/v1/subtitles') {
+      const langs = (u.searchParams.get('languages') || '').split(',').filter(Boolean);
+      const all = [
+        { id: '1', attributes: { language: 'en', release: 'Tears.of.Steel.2012.1080p.BluRay', download_count: 1200, hearing_impaired: false, machine_translated: false, fps: 24, files: [{ file_id: 9001, file_name: 'tos.en.srt' }] } },
+        { id: '2', attributes: { language: 'de', release: 'Tears.of.Steel.2012.German', download_count: 300, hearing_impaired: false, machine_translated: false, files: [{ file_id: 9002, file_name: 'tos.de.srt' }] } },
+        { id: '3', attributes: { language: 'en', release: 'Tears.of.Steel.SDH', download_count: 90, hearing_impaired: true, machine_translated: false, files: [{ file_id: 9003, file_name: 'tos.en.sdh.srt' }] } },
+      ];
+      const data = all.filter((r) => !langs.length || langs.includes(r.attributes.language));
+      return json(res, { total_count: data.length, total_pages: 1, page: 1, data });
+    }
+    return json(res, { message: 'Not found' }, 404);
+  }
+
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://fixture.local');
     const q = u.searchParams;
+    if (u.pathname.startsWith('/api/v1/') || u.pathname.startsWith('/os-files/')) return openSubtitles(req, res, u);
     if (u.pathname === '/__test/stats') return json(res, { ...stats, sizes: { channels: live.length, movies: vod.length, series: series.length, programmes: options.programmes } });
     if (u.pathname === '/__test/health') return json(res, { ok: true });
     if (options.streamMode === 'fixture' && u.pathname.startsWith('/fixtures/')) return media(req, res, u.pathname.slice('/fixtures/'.length));
@@ -163,7 +206,7 @@ export function createMockPanel(overrides = {}) {
         case 'get_vod_streams': return json(res, category ? vod.filter((s) => s.category_id === category) : vod);
         case 'get_vod_info': {
           const movie = vod.find((s) => String(s.stream_id) === q.get('vod_id'));
-          return json(res, { info: { plot: `${movie?.name || 'Movie'} — mock movie.`, genre: 'Test', duration: '00:12:14', releasedate: '2012-09-26', rating: movie?.rating }, movie_data: movie });
+          return json(res, { info: { plot: `${movie?.name || 'Movie'} — mock movie.`, genre: 'Test', duration: '00:12:14', releasedate: '2012-09-26', rating: movie?.rating, tmdb_id: movie?.name === 'Tears of Steel' ? '133701' : '' }, movie_data: movie });
         }
         case 'get_series_categories': return json(res, seriesCats);
         case 'get_series': return json(res, category ? series.filter((s) => s.category_id === category) : series);
