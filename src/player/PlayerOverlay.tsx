@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { usePlayer } from '../store/player';
 import { useLibrary, useAllGroups, ALL } from '../store/library';
@@ -43,6 +43,7 @@ export function PlayerOverlay() {
   const edgeY = Math.max(ins.bottom, safe.y);
 
   const item = usePlayer((st) => st.item)!;
+  const live = item.kind === 'live';
   const groupId = usePlayer((st) => st.groupId);
   const playChannel = usePlayer((st) => st.playChannel);
   const playCatchup = usePlayer((st) => st.playCatchup);
@@ -65,8 +66,10 @@ export function PlayerOverlay() {
 
   const status = usePlayback((st) => st.status);
   const error = usePlayback((st) => st.error);
-  const position = usePlayback((st) => st.position);
-  const duration = usePlayback((st) => st.duration);
+  // Position is never subscribed here (only SeekRow renders it): the overlay must not re-render every tick
+  const duration = usePlayback((st) => (live ? 0 : st.duration));
+  // boolean selector: re-renders only when the credits window is entered or left
+  const nearEndPos = usePlayback((st) => !live && st.duration > 0 && st.position >= st.duration - Math.min(45, Math.max(20, st.duration * 0.025)));
   const audioTracks = usePlayback((st) => st.audioTracks);
   const subtitleTracks = usePlayback((st) => st.subtitleTracks);
   const fit = usePlayback((st) => st.fit);
@@ -82,7 +85,6 @@ export function PlayerOverlay() {
   const hasExternalSubs = useSubtitles((st) => !!st.external);
 
   const now = useNow(5000);
-  const live = item.kind === 'live';
   const ch: Channel | undefined = item.kind !== 'vod' ? byId[item.channelId] : undefined;
   const programs = ch ? epg[ch.id] : undefined;
   const program = item.kind === 'catchup' ? item.program : ch ? programAt(programs, now) : undefined;
@@ -146,8 +148,7 @@ export function PlayerOverlay() {
   // with minutes of the episode still to go)
   const nextItem = item.kind === 'vod' ? item.next : undefined;
   const prevItem = item.kind === 'vod' ? item.prev : undefined;
-  const lead = duration > 0 ? Math.min(45, Math.max(20, duration * 0.025)) : 0;
-  const nearEnd = !!nextItem && duration > 0 && position >= duration - lead && status !== 'ended' && !upNext;
+  const nearEnd = !!nextItem && nearEndPos && status !== 'ended' && !upNext;
   const playNext = () => {
     if (item.kind !== 'vod' || !item.next) return;
     saveVodProgress(item.key, duration, duration);
@@ -157,7 +158,7 @@ export function PlayerOverlay() {
   // The episode before: this one keeps its place, that one picks up where it was left
   const playPrev = () => {
     if (item.kind !== 'vod' || !item.prev) return;
-    const { position: p, duration: d } = posRef.current;
+    const { position: p, duration: d } = usePlayback.getState();
     if (p > 0 && d > 0) saveVodProgress(item.key, p, d);
     setUpNext(null);
     playNextItem(item.prev, true);
@@ -172,27 +173,38 @@ export function PlayerOverlay() {
   }, [nearEnd, row]);
 
   // VOD resume points
-  const posRef = useRef({ position, duration });
-  posRef.current = { position, duration };
   useEffect(() => {
     if (item.kind !== 'vod') return;
+    let saved = -1;
     const t = setInterval(() => {
-      const { position: p, duration: d } = posRef.current;
-      if (p > 0 && d > 0) saveVodProgress(item.key, p, d);
+      const { position: p, duration: d } = usePlayback.getState();
+      // paused or stalled: nothing new to store, so don't rewrite the settings document
+      if (p > 0 && d > 0 && Math.abs(p - saved) >= 1) {
+        saved = p;
+        saveVodProgress(item.key, p, d);
+      }
     }, 10000);
     return () => clearInterval(t);
   }, [item, saveVodProgress]);
 
-  // Web: a refresh or closed tab keeps the exact position, not the last 10 s tick
+  // Leaving the app (web: refresh/closed tab, native: Home/exit) keeps the exact position, not the last 10 s tick
   useEffect(() => {
-    if (item.kind !== 'vod' || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (item.kind !== 'vod') return;
     const onHide = () => {
-      const { position: p, duration: d } = posRef.current;
+      const { position: p, duration: d } = usePlayback.getState();
       if (p > 0 && d > 0) useSettings.getState().saveVodProgress(item.key, p, d);
-      flushSettings();
+      // native: JS timers stop once the activity pauses, so the debounced save has to run now
+      void flushSettings().catch(() => {});
     };
-    window.addEventListener('pagehide', onHide);
-    return () => window.removeEventListener('pagehide', onHide);
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined') return;
+      window.addEventListener('pagehide', onHide);
+      return () => window.removeEventListener('pagehide', onHide);
+    }
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') onHide();
+    });
+    return () => sub.remove();
   }, [item]);
 
   // Only an item that actually played can end: never act on a stale "ended" left by the previous one
@@ -217,7 +229,8 @@ export function PlayerOverlay() {
 
   const exit = useCallback(() => {
     if (item.kind === 'vod') {
-      const { position: p, duration: d } = posRef.current;
+      // read before stop(): it resets the position
+      const { position: p, duration: d } = usePlayback.getState();
       if (p > 0) saveVodProgress(item.key, p, d);
       stop();
     } else if (item.kind === 'catchup') {
@@ -232,8 +245,13 @@ export function PlayerOverlay() {
     return g?.channelIds ?? [];
   }, [groups, groupId]);
 
-  const zap = (delta: number) => {
+  const lastZap = useRef(0);
+  const zap = (delta: number, repeat = 0) => {
     if (!ch || !zapList.length) return;
+    const t = Date.now();
+    // held key: step at most ~2.5 channels/s instead of loading a stream per key-repeat event
+    if (repeat > 0 && t - lastZap.current < 400) return;
+    lastZap.current = t;
     const i = zapList.indexOf(ch.id);
     const n = zapList.length;
     const nextId = zapList[(((i < 0 ? 0 : i) + delta) % n + n) % n];
@@ -434,10 +452,10 @@ export function PlayerOverlay() {
     if (status === 'error') {
       if (e.key === 'select') return retry();
       if (e.key === 'back') return exit();
-      if (live && (e.key === 'up' || e.key === 'chup')) return zap(-1);
-      if (live && (e.key === 'down' || e.key === 'chdown')) return zap(1);
-      if (e.key === 'prevtrack') return live ? zap(-1) : playPrev();
-      if (e.key === 'nexttrack') return live ? zap(1) : playNext();
+      if (live && (e.key === 'up' || e.key === 'chup')) return zap(-1, e.repeat);
+      if (live && (e.key === 'down' || e.key === 'chdown')) return zap(1, e.repeat);
+      if (e.key === 'prevtrack') return live ? zap(-1, e.repeat) : playPrev();
+      if (e.key === 'nexttrack') return live ? zap(1, e.repeat) : playNext();
       return;
     }
     // standard player shortcuts (web keyboard / remotes with dedicated keys)
@@ -459,7 +477,7 @@ export function PlayerOverlay() {
 
     if (e.key === 'prevtrack' || e.key === 'nexttrack') {
       const back = e.key === 'prevtrack';
-      if (live) return zap(back ? -1 : 1);
+      if (live) return zap(back ? -1 : 1, e.repeat);
       if (back ? prevItem : nextItem) return back ? playPrev() : playNext();
       // a movie: the track keys skip like ⏪ ⏩
       return skip(back ? -10 : 10);
@@ -469,10 +487,10 @@ export function PlayerOverlay() {
       switch (e.key) {
         case 'up':
         case 'chup':
-          return zap(-1);
+          return zap(-1, e.repeat);
         case 'down':
         case 'chdown':
-          return zap(1);
+          return zap(1, e.repeat);
         case 'left':
           if (visible && ctrl > 0) {
             poke();
@@ -543,7 +561,6 @@ export function PlayerOverlay() {
   const title = item.kind === 'vod' ? item.title : program?.title || ch?.name || '';
   const subtitle = item.kind === 'vod' ? item.subtitle : ch ? `${ch.num}  ${ch.name}` : '';
   const liveProgress = live && program ? (now - program.start) / (program.end - program.start) : 0;
-  const seekDuration = duration || (item.kind === 'catchup' ? (item.program.end - item.program.start) / 1000 : 0);
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -637,11 +654,7 @@ export function PlayerOverlay() {
                 ) : null}
               </>
             ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(12) }}>
-                <Text testID="player-position" style={{ color: colors.text, fontSize: k(14), width: k(72) }}>{formatDuration(position)}</Text>
-                <SeekBar position={position} duration={seekDuration} active={row === 'seek' && visible} onSeek={(sec) => (cmd.seekTo(sec), poke())} />
-                <Text style={{ color: colors.textDim, fontSize: k(14), width: k(72), textAlign: 'right' }}>{formatDuration(seekDuration)}</Text>
-              </View>
+              <SeekRow fallbackDuration={item.kind === 'catchup' ? (item.program.end - item.program.start) / 1000 : 0} active={row === 'seek' && visible} onSeek={(sec) => (cmd.seekTo(sec), poke())} />
             )}
 
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: k(10), marginTop: k(16) }}>
@@ -733,6 +746,20 @@ export function PlayerOverlay() {
           onClose={() => setListOpen(false)}
         />
       ) : null}
+    </View>
+  );
+}
+
+/** The only part of the overlay that follows the playback position tick by tick. */
+function SeekRow({ fallbackDuration, active, onSeek }: { fallbackDuration: number; active: boolean; onSeek: (sec: number) => void }) {
+  const { player: k } = useLayout();
+  const position = usePlayback((st) => st.position);
+  const duration = usePlayback((st) => st.duration) || fallbackDuration;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: k(12) }}>
+      <Text testID="player-position" style={{ color: colors.text, fontSize: k(14), width: k(72) }}>{formatDuration(position)}</Text>
+      <SeekBar position={position} duration={duration} active={active} onSeek={onSeek} />
+      <Text style={{ color: colors.textDim, fontSize: k(14), width: k(72), textAlign: 'right' }}>{formatDuration(duration)}</Text>
     </View>
   );
 }

@@ -14,12 +14,29 @@ function fileFor(key: string) {
   return new File(dir, fileName(key) + '.json');
 }
 
+// Small critical documents are written to a temp file and renamed, so a process kill mid-write
+// cannot leave a truncated file (losing every playlist). Cache pages are just refetched.
+const ATOMIC = new Set(['settings', 'device']);
+const tmpFor = (key: string) => new File(dir, fileName(key) + '.json.tmp');
+
 export async function getItem<T>(key: string): Promise<T | null> {
   try {
     const f = fileFor(key);
-    if (!f.exists) return null;
-    const text = await f.text();
-    return JSON.parse(text) as T;
+    if (f.exists) {
+      try {
+        return JSON.parse(await f.text()) as T;
+      } catch (e) {
+        if (!ATOMIC.has(key)) throw e;
+        console.warn('storage.getItem: unreadable, trying temp copy', key, e);
+      }
+    }
+    // The real file first, the temp copy second: a leftover temp may itself be an interrupted write,
+    // while a missing real file with a complete temp is a kill between delete and rename.
+    if (ATOMIC.has(key)) {
+      const tmp = tmpFor(key);
+      if (tmp.exists) return JSON.parse(await tmp.text()) as T;
+    }
+    return null;
   } catch (e) {
     console.warn('storage.getItem failed', key, e);
     return null;
@@ -28,8 +45,21 @@ export async function getItem<T>(key: string): Promise<T | null> {
 
 export async function setItem(key: string, value: unknown): Promise<void> {
   const f = fileFor(key);
+  const text = JSON.stringify(value);
+  if (ATOMIC.has(key)) {
+    try {
+      const tmp = tmpFor(key); // a new object each time: moveSync rewrites its uri
+      if (!tmp.exists) tmp.create({ overwrite: true });
+      tmp.write(text);
+      tmp.moveSync(f, { overwrite: true });
+      return;
+    } catch (e) {
+      // never stop saving settings over an unexpected filesystem error
+      console.warn('storage.setItem: atomic write failed, writing directly', key, e);
+    }
+  }
   if (!f.exists) f.create({ overwrite: true });
-  f.write(JSON.stringify(value));
+  f.write(text);
 }
 
 export async function removeItem(key: string): Promise<void> {

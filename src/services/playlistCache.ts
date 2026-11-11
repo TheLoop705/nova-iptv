@@ -25,10 +25,11 @@ const keyFor = (id: string) => 'pl-parts:' + id;
 const pageKey = (key: string, manifest: Manifest, kind: 'channels' | 'movies', page: number) => `${key}:${manifest.token}:${kind}:${page}`;
 const BATCH = 128;
 
-export function readPlaylistCache(id: string, signal?: AbortSignal, source?: PlaylistSource): Promise<PlaylistCache | null> {
-  return withCacheLock(keyFor(id), () => read(id, signal, source));
+/** skipMovies returns `movies: []` without reading their pages; never write such a result back. */
+export function readPlaylistCache(id: string, signal?: AbortSignal, source?: PlaylistSource, opts: { skipMovies?: boolean } = {}): Promise<PlaylistCache | null> {
+  return withCacheLock(keyFor(id), () => read(id, signal, source, opts.skipMovies));
 }
-async function read(id: string, signal?: AbortSignal, source?: PlaylistSource): Promise<PlaylistCache | null> {
+async function read(id: string, signal?: AbortSignal, source?: PlaylistSource, skipMovies = false): Promise<PlaylistCache | null> {
   const key = keyFor(id);
   const manifest = await getItem<Manifest>(key);
   throwIfAborted(signal);
@@ -39,6 +40,7 @@ async function read(id: string, signal?: AbortSignal, source?: PlaylistSource): 
   if (source && (!manifest.source || !samePlaylistSource(manifest.source, source))) return result;
   const checkpoint = createCheckpoint(signal);
   for (const kind of ['channels', 'movies'] as const) {
+    if (kind === 'movies' && skipMovies) continue;
     const pages = kind === 'channels' ? manifest.channelPages : manifest.moviePages;
     for (let i = 0; i < pages; i++) {
       const page = await getItem<(Channel | VodItem)[]>(pageKey(key, manifest, kind, i));

@@ -19,6 +19,7 @@ import { SectionStatus } from '../components/SectionStatus';
 
 type Item = VodItem | SeriesItem;
 type Zone = 'cats' | 'grid' | 'retry';
+type Cat = { id: string; name: string; favorite?: boolean };
 const RECENT = '__recent';
 const FAVS = '__fav';
 
@@ -59,7 +60,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
       ...(favItems.length ? [{ id: FAVS, name: 'Favorites' }] : []),
       ...(cats ?? []).filter((c) => fav.has(c.id)).map((c) => ({ ...c, favorite: true })),
       ...(cats ?? []).filter((c) => !fav.has(c.id)),
-    ] as { id: string; name: string; favorite?: boolean }[];
+    ] as Cat[];
   }, [kind, recent?.length, favItems.length, cats, favCats]);
 
   // Home's "See all" opens a category with the grid focused
@@ -146,12 +147,8 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   const posterW = (gridW - gap * (cols - 1)) / cols;
   const rowH = posterW * 1.5 + (tv ? s(46) : 50);
   const gridRef = useRef<FlatList<Item>>(null);
-  const catRef = useRef<FlatList>(null);
   const catH = tv ? s(34) : 0;
 
-  useEffect(() => {
-    if (tv) catRef.current?.scrollToOffset({ offset: Math.max(0, (catIndex - 4) * catH), animated: true });
-  }, [catIndex, catH, tv]);
   useEffect(() => {
     const r = Math.floor(gi / cols);
     gridRef.current?.scrollToOffset({ offset: Math.max(0, r * rowH - (tv ? s(10) : 0)), animated: true });
@@ -216,8 +213,15 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
   };
 
   // Stable callbacks keep memoized posters from all rerendering on every D-pad press.
-  const actions = useRef({ open, itemSheet });
-  actions.current = { open, itemSheet };
+  const actions = useRef({ open, itemSheet, catSheet });
+  actions.current = { open, itemSheet, catSheet };
+  // Same for the category list: it only rerenders when its own cursor or selection moves.
+  const pickCat = useCallback((c: Cat, i: number) => {
+    setCatIndex(i);
+    setSelected(c.id);
+    setGi(0);
+  }, []);
+  const menuCat = useCallback((c: Cat, anchor?: MenuAnchor) => actions.current.catSheet(c, anchor), []);
   const openPoster = useCallback((item: Item, index: number) => {
     setGi(index);
     setZone('grid');
@@ -302,42 +306,7 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
       </View>
       <View style={{ flex: 1, flexDirection: tv ? 'row' : 'column' }}>
         {tv ? (
-          <FlatList
-            ref={catRef}
-            data={allCats}
-            style={{ width: catsW, flexGrow: 0 }}
-            contentContainerStyle={{ paddingLeft: s(10), paddingBottom: s(20) }}
-            keyExtractor={(c) => c.id}
-            getItemLayout={(_d, i) => ({ length: catH, offset: catH * i, index: i })}
-            renderItem={({ item: c, index }) => (
-              <Focusable
-                focused={zone === 'cats' && index === catIndex}
-                onPress={() => {
-                  setCatIndex(index);
-                  setSelected(c.id);
-                  setGi(0);
-                }}
-                onLongPress={() => catSheet(c)}
-                onContextMenu={(anchor) => catSheet(c, anchor)}
-                style={{ height: catH - s(2), borderRadius: s(radius.sm), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center', backgroundColor: c.id === selected ? colors.accentSoft : 'transparent' }}
-                focusStyle={{ backgroundColor: colors.focus }}
-              >
-                {({ focused, hovered }) => (
-                  <>
-                    {c.id === RECENT || c.id === FAVS || c.favorite ? (
-                      <Icon
-                        name={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : 'folder-star'}
-                        size={s(13)}
-                        color={focused ? colors.focusText : c.id === RECENT ? colors.accent : colors.star}
-                        style={{ marginRight: s(7) }}
-                      />
-                    ) : null}
-                    <HoverTitle text={c.name} active={hovered || focused} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: c.id === selected ? '700' : '500' }} />
-                  </>
-                )}
-              </Focusable>
-            )}
-          />
+          <VodCategoryList cats={allCats} index={catIndex} focused={zone === 'cats'} selected={selected} width={catsW} itemH={catH} s={s} onPick={pickCat} onMenu={menuCat} />
         ) : (
           <FlatList horizontal data={allCats} keyExtractor={(c) => c.id} showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 8 }} initialNumToRender={8} windowSize={5} renderItem={({ item: c }) => (
               <Chip
@@ -412,6 +381,78 @@ function VodBrowser({ kind }: { kind: 'movies' | 'series' }) {
     </View>
   );
 }
+
+const VodCategoryItem = React.memo(function VodCategoryItem({ c, index, focused, selected, itemH, s, onPick, onMenu }: {
+  c: Cat;
+  index: number;
+  focused: boolean;
+  selected: boolean;
+  itemH: number;
+  s: (n: number) => number;
+  onPick: (c: Cat, index: number) => void;
+  onMenu: (c: Cat, anchor?: MenuAnchor) => void;
+}) {
+  return (
+    <Focusable
+      focused={focused}
+      onPress={() => onPick(c, index)}
+      onLongPress={() => onMenu(c)}
+      onContextMenu={(anchor) => onMenu(c, anchor)}
+      style={{ height: itemH - s(2), borderRadius: s(radius.sm), paddingHorizontal: s(10), flexDirection: 'row', alignItems: 'center', backgroundColor: selected ? colors.accentSoft : 'transparent' }}
+      focusStyle={{ backgroundColor: colors.focus }}
+    >
+      {({ focused: f, hovered }) => (
+        <>
+          {c.id === RECENT || c.id === FAVS || c.favorite ? (
+            <Icon
+              name={c.id === RECENT ? 'history' : c.id === FAVS ? 'star' : 'folder-star'}
+              size={s(13)}
+              color={f ? colors.focusText : c.id === RECENT ? colors.accent : colors.star}
+              style={{ marginRight: s(7) }}
+            />
+          ) : null}
+          <HoverTitle text={c.name} active={hovered || f} containerStyle={{ flex: 1 }} style={{ color: f ? colors.focusText : colors.text, fontSize: s(12.5), fontWeight: selected ? '700' : '500' }} />
+        </>
+      )}
+    </Focusable>
+  );
+});
+
+// TV category column, split from the browser so D-pad presses in the poster grid don't rerender it.
+const VodCategoryList = React.memo(function VodCategoryList({ cats, index, focused, selected, width, itemH, s, onPick, onMenu }: {
+  cats: Cat[];
+  index: number;
+  focused: boolean;
+  selected?: string;
+  width: number;
+  itemH: number;
+  s: (n: number) => number;
+  onPick: (c: Cat, index: number) => void;
+  onMenu: (c: Cat, anchor?: MenuAnchor) => void;
+}) {
+  const ref = useRef<FlatList<Cat>>(null);
+  useEffect(() => {
+    ref.current?.scrollToOffset({ offset: Math.max(0, (index - 4) * itemH), animated: true });
+  }, [index, itemH]);
+  const renderItem = useCallback(({ item: c, index: i }: { item: Cat; index: number }) => (
+    <VodCategoryItem c={c} index={i} focused={focused && i === index} selected={c.id === selected} itemH={itemH} s={s} onPick={onPick} onMenu={onMenu} />
+  ), [focused, index, selected, itemH, s, onPick, onMenu]);
+  return (
+    <FlatList
+      ref={ref}
+      data={cats}
+      extraData={renderItem}
+      renderItem={renderItem}
+      keyExtractor={(c) => c.id}
+      getItemLayout={(_d, i) => ({ length: itemH, offset: itemH * i, index: i })}
+      initialNumToRender={16}
+      maxToRenderPerBatch={12}
+      windowSize={7}
+      style={{ width, flexGrow: 0 }}
+      contentContainerStyle={{ paddingLeft: s(10), paddingBottom: s(20) }}
+    />
+  );
+});
 
 const VodPosterCard = React.memo(function VodPosterCard({ item, kind, playlistId, index, testID, width, focused, tv, s, onOpen, onMenu }: {
   item: Item;

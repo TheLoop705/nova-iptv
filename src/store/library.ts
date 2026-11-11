@@ -427,8 +427,10 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         return;
       }
       if (!isCurrent()) return;
-      let data = !opts.force && preparedPlaylist?.generation === generation ? preparedPlaylist.data :
-        opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p);
+      const prepared = !opts.force && preparedPlaylist?.generation === generation ? preparedPlaylist.data : null;
+      // load() already restored and published this M3U playlist's movies; do not read or regroup them again.
+      const skipMovies = !prepared && !opts.force && p!.type === 'm3u' && get().moviesAllLoaded;
+      let data = prepared ?? (opts.force || p!.type === 'demo' ? null : await readPlaylistCache(p!.id, signal, p, { skipMovies }));
       if (!isCurrent()) return;
       if (data && (!data.source || !samePlaylistSource(data.source, p!))) {
         await Promise.all([removePlaylistCache(p!.id), removeEpgCache(p!.id)]);
@@ -443,7 +445,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
         if (!isCurrent()) return;
       }
       await applyChannels(data, signal, isCurrent);
-      if (p!.type === 'm3u') await applyMovies(p!, data.movies, signal, isCurrent);
+      if (p!.type === 'm3u' && (downloaded || !skipMovies)) await applyMovies(p!, data.movies, signal, isCurrent);
       if (!isCurrent()) return;
       set({ status: 'ready', message: undefined });
       if (epgWanted) {
@@ -793,6 +795,10 @@ export function useAllGroups(): Group[] {
 }
 
 let memo: { key: unknown[]; value: Group[] } | null = null;
+// Recents change on every zap; keep the other derived groups identity-stable so the guide's rows bail out.
+let allMemo: { channels: Channel[]; group: Group } | null = null;
+let favMemo: { favs: string[] | undefined; byId: Record<string, Channel>; group: Group | null } | null = null;
+const favCatMemo = new WeakMap<Group, Group>();
 function useMemoGroups(
   groups: Group[],
   byId: Record<string, Channel>,
@@ -805,15 +811,24 @@ function useMemoGroups(
   const key = [groups, byId, channels, favs, recents, hidden, favCats];
   if (memo && memo.key.every((k, i) => k === key[i])) return memo.value;
   const out: Group[] = [];
-  const fav = (favs ?? []).filter((id) => byId[id]);
-  if (fav.length) out.push({ id: FAV, name: 'Favorites', channelIds: fav, virtual: true });
+  if (!favMemo || favMemo.favs !== favs || favMemo.byId !== byId) {
+    const ids = (favs ?? []).filter((id) => byId[id]);
+    favMemo = { favs, byId, group: ids.length ? { id: FAV, name: 'Favorites', channelIds: ids, virtual: true } : null };
+  }
+  if (favMemo.group) out.push(favMemo.group);
   const rec = (recents ?? []).filter((id) => byId[id]);
   if (rec.length) out.push({ id: RECENT, name: 'Recently watched', channelIds: rec, virtual: true });
-  out.push({ id: ALL, name: 'All channels', channelIds: channels.map((c) => c.id), virtual: true });
+  if (!allMemo || allMemo.channels !== channels) allMemo = { channels, group: { id: ALL, name: 'All channels', channelIds: channels.map((c) => c.id), virtual: true } };
+  out.push(allMemo.group);
   const hide = new Set(hidden ?? []);
   // favourite categories right after the built-in ones, in playlist order
   const favCat = new Set(favCats ?? []);
-  for (const g of groups) if (!hide.has(g.id) && favCat.has(g.id)) out.push({ ...g, favorite: true });
+  for (const g of groups) {
+    if (hide.has(g.id) || !favCat.has(g.id)) continue;
+    let f = favCatMemo.get(g);
+    if (!f) favCatMemo.set(g, (f = { ...g, favorite: true }));
+    out.push(f);
+  }
   for (const g of groups) if (!hide.has(g.id) && !favCat.has(g.id)) out.push(g);
   memo = { key, value: out };
   return out;

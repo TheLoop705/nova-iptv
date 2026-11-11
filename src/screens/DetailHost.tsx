@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HoverTitle } from '../components/HoverTitle';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
@@ -171,7 +171,11 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
   const [hb, setHb] = useState(0);
   const [isFav, toggleFav] = useFav('series', item);
   const pid = useLibrary((st) => st.playlistId);
-  const progress = useSettings((st) => st.vodProgress);
+  // The player saves progress every 10 s; while it covers this page keep the last map and catch up on return
+  const liveProgress = useSettings((st) => (active ? st.vodProgress : undefined));
+  const progressRef = useRef(liveProgress ?? useSettings.getState().vodProgress);
+  if (liveProgress) progressRef.current = liveProgress;
+  const progress = progressRef.current;
   const history = useSettings((st) => (pid ? st.history[pid] : undefined));
   const setWatched = useSettings((st) => st.setWatched);
   const openSheet = useUI((st) => st.openSheet);
@@ -253,6 +257,26 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
       ],
     });
   };
+  // Stable handlers and primitive badge props so a cursor move re-renders two rows, not the list
+  const episodeSheetRef = useRef(episodeSheet);
+  episodeSheetRef.current = episodeSheet;
+  const onPlayEpisode = useCallback(
+    (e: Episode, i: number) => {
+      setEp(i);
+      playEpisode(item, e);
+    },
+    [item]
+  );
+  const onEpisodeMenu = useCallback((e: Episode, anchor?: MenuAnchor) => episodeSheetRef.current(e, anchor), []);
+  const hereIndex = resume && resume.season === season ? resume.index : -1;
+  const upNext = !!resume?.next;
+  const episodesFocused = zone === 'episodes';
+  const renderEpisode = useCallback(
+    ({ item: e, index: i }: { item: Episode; index: number }) => (
+      <EpisodeRow e={e} index={i} focused={episodesFocused && i === ep} here={i === hereIndex} upNext={upNext} epH={epH} tv={tv} s={s} onPlay={onPlayEpisode} onMenu={onEpisodeMenu} />
+    ),
+    [episodesFocused, ep, hereIndex, upNext, epH, tv, s, onPlayEpisode, onEpisodeMenu]
+  );
 
   useEffect(() => {
     setEp((i) => Math.min(i, Math.max(0, episodes.length - 1)));
@@ -394,56 +418,8 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
             getItemLayout={(_d, i) => ({ length: epH, offset: epH * i, index: i })}
             // opens already scrolled to the preselected episode
             initialScrollIndex={Math.max(0, Math.min(ep - 2, episodes.length - 1))}
-            renderItem={({ item: e, index: i }) => {
-              const pr = progress[episodeKey(e)];
-              const here = resume?.season === season && resume.index === i;
-              return (
-                <Focusable
-                  focused={zone === 'episodes' && i === ep}
-                  onPress={() => {
-                    setEp(i);
-                    playEpisode(item, e);
-                  }}
-                  onLongPress={() => episodeSheet(e)}
-                  onContextMenu={(anchor) => episodeSheet(e, anchor)}
-                  style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: here ? colors.accentSoft : colors.surface, marginBottom: tv ? s(6) : 8 }}
-                  focusStyle={{ backgroundColor: colors.focus }}
-                >
-                  {({ focused, hovered }) => (
-                    <>
-                      <Text style={{ width: tv ? s(34) : 34, color: focused ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          {here ? <Badge label={resume.next ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
-                          <HoverTitle text={e.title} active={hovered || focused} containerStyle={{ flex: 1 }} style={{ color: focused ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
-                        </View>
-                        {e.plot ? (
-                          <Text numberOfLines={1} style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
-                            {e.plot}
-                          </Text>
-                        ) : null}
-                        {pr && pr.pos > 0 ? (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
-                            <View style={{ height: 3, backgroundColor: focused ? colors.focusDim : colors.surface3, borderRadius: radius.pill, width: '40%' }}>
-                              <View style={{ height: '100%', width: `${Math.min(100, (pr.pos / pr.dur) * 100)}%`, backgroundColor: focused ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
-                            </View>
-                            <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(10.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{timeLeft(pr.pos, pr.dur)}</Text>
-                          </View>
-                        ) : null}
-                      </View>
-                      {pr?.done ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
-                          <Icon name="check-circle" size={k(14)} color={focused ? colors.focusText : colors.success} />
-                          <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11), marginLeft: 4, fontWeight: '700' }}>Watched</Text>
-                        </View>
-                      ) : null}
-                      {e.duration ? <Text style={{ color: focused ? colors.focusDim : colors.muted, fontSize: k(11.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{e.duration}</Text> : null}
-                      <Icon name={pr && pr.pos > 0 ? 'play-circle' : 'play-circle-outline'} size={k(20)} color={focused ? colors.focusText : colors.textDim} style={{ marginLeft: 10 }} />
-                    </>
-                  )}
-                </Focusable>
-              );
-            }}
+            renderItem={renderEpisode}
+            extraData={renderEpisode}
           />
         </View>
       ) : null}
@@ -451,6 +427,78 @@ function SeriesDetail({ item, active }: { item: SeriesItem; active: boolean }) {
     </View>
   );
 }
+
+/** One episode line; subscribes to its own progress so a save re-renders this row only. */
+const EpisodeRow = memo(function EpisodeRow({
+  e,
+  index,
+  focused,
+  here,
+  upNext,
+  epH,
+  tv,
+  s,
+  onPlay,
+  onMenu,
+}: {
+  e: Episode;
+  index: number;
+  focused: boolean;
+  /** the episode to carry on with */
+  here: boolean;
+  upNext: boolean;
+  epH: number;
+  tv: boolean;
+  s: (n: number) => number;
+  onPlay: (e: Episode, index: number) => void;
+  onMenu: (e: Episode, anchor?: MenuAnchor) => void;
+}) {
+  const k = tv ? s : (n: number) => n * 1.1;
+  const pr = useSettings((st) => st.vodProgress[episodeKey(e)]);
+  return (
+    <Focusable
+      focused={focused}
+      onPress={() => onPlay(e, index)}
+      onLongPress={() => onMenu(e)}
+      onContextMenu={(anchor) => onMenu(e, anchor)}
+      style={{ height: epH - (tv ? s(6) : 8), borderRadius: tv ? s(radius.md) : radius.md, flexDirection: 'row', alignItems: 'center', paddingHorizontal: tv ? s(12) : 12, backgroundColor: here ? colors.accentSoft : colors.surface, marginBottom: tv ? s(6) : 8 }}
+      focusStyle={{ backgroundColor: colors.focus }}
+    >
+      {({ focused: f, hovered }) => (
+        <>
+          <Text style={{ width: tv ? s(34) : 34, color: f ? colors.focusDim : colors.muted, fontWeight: '800', fontSize: k(13), fontVariant: ['tabular-nums'] }}>{e.episode}</Text>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {here ? <Badge label={upNext ? 'UP NEXT' : 'CONTINUE'} tone="catchup" /> : null}
+              <HoverTitle text={e.title} active={hovered || f} containerStyle={{ flex: 1 }} style={{ color: f ? colors.focusText : colors.text, fontWeight: '700', fontSize: k(12.5) }} />
+            </View>
+            {e.plot ? (
+              <Text numberOfLines={1} style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11.5), marginTop: 2 }}>
+                {e.plot}
+              </Text>
+            ) : null}
+            {pr && pr.pos > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                <View style={{ height: 3, backgroundColor: f ? colors.focusDim : colors.surface3, borderRadius: radius.pill, width: '40%' }}>
+                  <View style={{ height: '100%', width: `${Math.min(100, (pr.pos / pr.dur) * 100)}%`, backgroundColor: f ? colors.accentFill : colors.accent, borderRadius: radius.pill }} />
+                </View>
+                <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(10.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{timeLeft(pr.pos, pr.dur)}</Text>
+              </View>
+            ) : null}
+          </View>
+          {pr?.done ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+              <Icon name="check-circle" size={k(14)} color={f ? colors.focusText : colors.success} />
+              <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11), marginLeft: 4, fontWeight: '700' }}>Watched</Text>
+            </View>
+          ) : null}
+          {e.duration ? <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: k(11.5), marginLeft: 8, fontVariant: ['tabular-nums'] }}>{e.duration}</Text> : null}
+          <Icon name={pr && pr.pos > 0 ? 'play-circle' : 'play-circle-outline'} size={k(20)} color={f ? colors.focusText : colors.textDim} style={{ marginLeft: 10 }} />
+        </>
+      )}
+    </Focusable>
+  );
+});
 
 /** "12 min left" */
 function timeLeft(pos: number, dur: number) {

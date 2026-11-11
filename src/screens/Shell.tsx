@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { BackHandler, Platform, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, useLayout } from '../theme';
 import { useUI, type Screen } from '../store/ui';
 import { useLibrary } from '../store/library';
 import { useActivePlaylist } from '../store/settings';
 import { usePlayer } from '../store/player';
+import { canExitApp, exitApp } from '../store/actions';
 import { Layer, useKeys } from '../input/keys';
 import { Icon } from '../components/Icon';
 import { Button } from '../components/Button';
@@ -50,11 +51,11 @@ export function Shell() {
   }, [menuFocused, screen]);
 
   const exitPrompt = () => {
-    if (Platform.OS !== 'android') return false;
+    if (!canExitApp) return false;
     openSheet({
       title: 'Exit Nova?',
       options: [
-        { label: 'Exit', icon: 'exit-to-app', onSelect: () => BackHandler.exitApp() },
+        { label: 'Exit', icon: 'exit-to-app', onSelect: () => void exitApp() },
         { label: 'Cancel', icon: 'close', onSelect: () => {} },
       ],
     });
@@ -192,7 +193,7 @@ export function Shell() {
           );
         })}
         {menuFocused ? (
-          <Text style={[type('caption'), { position: 'absolute', left: s(16), right: s(12), bottom: s(14) + safe.y, color: colors.muted }]}>Back to exit · → to return</Text>
+          <Text style={[type('caption'), { position: 'absolute', left: s(16), right: s(12), bottom: s(14) + safe.y, color: colors.muted }]}>{canExitApp ? 'Back to exit · → to return' : '→ to return'}</Text>
         ) : null}
       </View>
     </View>

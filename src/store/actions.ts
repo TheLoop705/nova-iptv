@@ -1,7 +1,9 @@
+import { BackHandler, Platform } from 'react-native';
 import type { SeriesItem, VodItem } from '../types';
+import { RemoteKeys } from '../../modules/remote-keys';
 import { useUI } from './ui';
 import { usePlayer } from './player';
-import { useSettings, watchId } from './settings';
+import { flushSettings, useSettings, watchId } from './settings';
 import { useLibrary } from './library';
 import { usePlayback } from '../player/playback';
 import { episodeKey, movieKey, seriesProgressKeys } from '../services/vod';
@@ -26,6 +28,42 @@ export function openSearch() {
   }
   ui.setScreen('search');
   ui.focusSearch();
+}
+
+/** The Windows app: the web build inside the desktop host, which can close its own window. */
+const isDesktop = Platform.OS === 'web' && process.env.EXPO_PUBLIC_DESKTOP === '1';
+/** A browser tab cannot close itself and iOS apps never quit themselves. */
+export const canExitApp = Platform.OS === 'android' || isDesktop;
+
+/**
+ * Really closes the app. Android's default only moves the task to the background, which keeps the
+ * JS heap, the decoder and the provider connection: release the player, save, then end the task and process.
+ */
+export async function exitApp() {
+  const player = usePlayer.getState();
+  if (player.item?.kind === 'vod') {
+    const { position, duration } = usePlayback.getState();
+    if (position > 0 && duration > 0) useSettings.getState().saveVodProgress(player.item.key, position, duration);
+  }
+  // VideoLayer unmounts: the player is released and its playback service unbound, so native can stop it
+  player.stop();
+  if (Platform.OS === 'web') {
+    // the desktop host saves settings in its close handler before destroying the window
+    if (isDesktop && typeof window !== 'undefined') window.close();
+    return;
+  }
+  // Nothing may change settings after this save: the process ends right after it
+  try {
+    await flushSettings();
+  } catch {}
+  // Let React commit the unmount. Timers still run here because the app is in the foreground.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  try {
+    if (RemoteKeys?.exitApp) await RemoteKeys.exitApp();
+    else BackHandler.exitApp();
+  } catch {
+    BackHandler.exitApp();
+  }
 }
 
 /** Something that can be in the watch history. */

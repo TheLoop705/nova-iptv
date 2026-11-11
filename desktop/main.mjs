@@ -13,7 +13,7 @@ if (!app.requestSingleInstanceLock()) {
   let desktop;
   app.on('second-instance', () => {
     const window = desktop?.window;
-    if (!window || window.isDestroyed()) return;
+    if (!window || window.isDestroyed() || desktop.isClosing()) return; // Don't re-show a window that is saving on its way out.
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();

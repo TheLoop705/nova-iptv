@@ -5,7 +5,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors, fonts, useLayout } from './theme';
-import { useActivePlaylist, useSettings } from './store/settings';
+import { flushSettings, useActivePlaylist, useSettings } from './store/settings';
 import { useLibrary } from './store/library';
 import { usePlayer } from './store/player';
 import { useUI } from './store/ui';
@@ -85,6 +85,16 @@ function Root() {
       clearTimeout(fallback);
       stop();
     };
+  }, []);
+
+  // Native: JS timers stop when the activity pauses, so the debounced settings save would stay
+  // unwritten (and be lost if Android kills the process). Save as the app leaves the foreground.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') void flushSettings().catch(() => {});
+    });
+    return () => sub.remove();
   }, []);
 
   useEffect(() => startPerformanceMonitor(() => Platform.OS === 'web'

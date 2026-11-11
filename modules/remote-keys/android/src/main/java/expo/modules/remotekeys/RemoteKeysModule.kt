@@ -1,6 +1,10 @@
 package expo.modules.remotekeys
 
 import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -37,6 +41,33 @@ class RemoteKeysModule : Module() {
       val view = activity.currentFocus as? EditText ?: return@AsyncFunction false
       val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
       imm.showSoftInput(view, 0)
+    }.runOnQueue(Queues.MAIN)
+
+    // Really closes the app. The default back action only moves the task to the background, which
+    // leaves the JS heap, the decoder and the provider connection alive. JS stops the player first.
+    AsyncFunction("exitApp") {
+      enabled = false
+      val activity = appContext.currentActivity
+      val context = appContext.reactContext?.applicationContext
+      // expo-video's playback service is a started service: left running it keeps or restarts the
+      // process. Named by string so this module needs no expo-video dependency.
+      if (context != null) {
+        runCatching {
+          context.stopService(Intent().setClassName(context, "expo.modules.video.playbackService.ExpoVideoPlaybackService"))
+        }
+      }
+      // Hand the TV back its own refresh rate if frame-rate matching changed it
+      activity?.window?.let { window ->
+        val attributes = window.attributes
+        if (attributes.preferredDisplayModeId != 0) {
+          attributes.preferredDisplayModeId = 0
+          window.attributes = attributes
+        }
+      }
+      activity?.finishAndRemoveTask()
+      // The React host and JS heap outlive the activity, so end the process once the task is gone
+      Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 600)
+      Unit
     }.runOnQueue(Queues.MAIN)
   }
 

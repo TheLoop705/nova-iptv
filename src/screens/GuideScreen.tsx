@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, PanResponder, Pressable, ScrollView, Text, View, type ViewToken } from 'react-native';
 import type { Channel, Program } from '../types';
 import { colors, fonts, radius, useLayout } from '../theme';
@@ -29,7 +29,7 @@ const nowWindow = (t: number) => align(t - 10 * 60000);
 type Zone = 'grid' | 'channels' | 'groups' | 'status';
 
 export function GuideScreen() {
-  const { s, mode, width: winW } = useLayout();
+  const { s, mode, width: winW, height: winH } = useLayout();
   const tv = mode === 'tv';
   const keyMode = useKeyMode();
 
@@ -51,7 +51,8 @@ export function GuideScreen() {
   const showToast = useUI((st) => st.showToast);
   const item = usePlayer((st) => st.item);
   const fullscreen = usePlayer((st) => st.fullscreen);
-  const now = useNow(15000);
+  // Paused while the fullscreen player covers the guide
+  const now = useNow(15000, !(fullscreen && !!item));
 
   // The guide data loads on first visit rather than at startup
   useEffect(() => useLibrary.getState().wantEpg(), []);
@@ -77,6 +78,8 @@ export function GuideScreen() {
   const heroH = tv ? s(118) : 0;
   const headerH = tv ? s(26) : 30;
   const rowH = tv ? s(52) : 62;
+  // Initial rows stay mounted for the life of the list: render what fits, not a fixed batch
+  const firstRows = Math.max(6, Math.ceil((winH - heroH - headerH) / rowH) + 1);
   // TV/desktop: categories and channels are always on screen, the grid takes what's left
   const catW = tv ? s(168) : 0;
   const catGap = tv ? s(8) : 0;
@@ -431,6 +434,10 @@ export function GuideScreen() {
       ],
     });
   };
+  // Stable handler for the memoised category column; reads the current sheet through a ref
+  const groupSheetRef = useRef(groupSheet);
+  groupSheetRef.current = groupSheet;
+  const onLongPickGroup = useCallback((g: GuideGroup, anchor?: MenuAnchor) => groupSheetRef.current(g, anchor), []);
 
   useKeys(onKey, !menuFocused && !fullscreen, Layer.screen);
 
@@ -606,9 +613,9 @@ export function GuideScreen() {
           width={catW}
           headerH={headerH}
           s={s}
-          onPick={(id) => chooseGroup(id)}
-          onLongPick={(g, anchor) => groupSheet(g, anchor)}
-          style={{ marginRight: catGap }}
+          onPick={chooseGroup}
+          onLongPick={onLongPickGroup}
+          gap={catGap}
         />
       ) : null}
       <View style={{ flex: 1 }}>
@@ -654,7 +661,7 @@ export function GuideScreen() {
             onLayout={(e) => (listH.current = e.nativeEvent.layout.height)}
             onScroll={(e) => { topRow.current = Math.round(e.nativeEvent.contentOffset.y / rowH); update({ top: topRow.current }); }}
             scrollEventThrottle={32}
-            initialNumToRender={14}
+            initialNumToRender={firstRows}
             maxToRenderPerBatch={12}
             windowSize={7}
             removeClippedSubviews={false}
@@ -718,8 +725,55 @@ function HeaderBtn({ icon, label, onPress, s, tv }: { icon?: string; label?: str
   );
 }
 
-/** Always-visible category list on the left of the TV guide. */
-function CategoryColumn({
+type GuideGroup = ReturnType<typeof useAllGroups>[number];
+
+const CategoryItem = memo(function CategoryItem({
+  g,
+  active,
+  focused,
+  itemH,
+  s,
+  onPick,
+  onLongPick,
+}: {
+  g: GuideGroup;
+  active: boolean;
+  focused: boolean;
+  itemH: number;
+  s: (n: number) => number;
+  onPick: (id: string) => void;
+  onLongPick: (g: GuideGroup, anchor?: MenuAnchor) => void;
+}) {
+  return (
+    <Focusable
+      focused={focused}
+      onPress={() => onPick(g.id)}
+      onLongPress={() => onLongPick(g)}
+      onContextMenu={(anchor) => onLongPick(g, anchor)}
+      style={{ height: itemH - s(2), marginHorizontal: s(4), marginVertical: s(1), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(9), backgroundColor: active ? colors.accentSoft : 'transparent' }}
+      focusStyle={{ backgroundColor: colors.focus }}
+    >
+      {({ focused: f }) => (
+        <>
+          {active && !f ? <View style={{ position: 'absolute', left: 0, top: s(8), bottom: s(8), width: s(3), borderRadius: 2, backgroundColor: colors.accent }} /> : null}
+          <Icon
+            name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : g.favorite ? 'folder-star' : 'folder-outline'}
+            size={s(13)}
+            color={f ? colors.focusText : g.id === 'fav' || g.favorite ? colors.star : active ? colors.accent : colors.muted}
+            style={{ marginRight: s(8) }}
+          />
+          <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : active ? colors.text : colors.textDim, fontSize: s(12.5), fontWeight: active || f ? '700' : '600', fontFamily: fonts.regular }}>
+            {g.name}
+          </Text>
+          <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: s(11), marginLeft: s(6), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>{g.channelIds.length}</Text>
+        </>
+      )}
+    </Focusable>
+  );
+});
+
+/** Always-visible category list on the left of the TV guide. Memoised: grid navigation and clock ticks must not touch it. */
+const CategoryColumn = memo(function CategoryColumn({
   groups,
   index,
   activeId,
@@ -729,9 +783,9 @@ function CategoryColumn({
   s,
   onPick,
   onLongPick,
-  style,
+  gap,
 }: {
-  groups: ReturnType<typeof useAllGroups>;
+  groups: GuideGroup[];
   /** remote cursor; tracks the active group when the column isn't focused */
   index: number;
   activeId?: string;
@@ -740,8 +794,8 @@ function CategoryColumn({
   headerH: number;
   s: (n: number) => number;
   onPick: (id: string) => void;
-  onLongPick: (g: ReturnType<typeof useAllGroups>[number], anchor?: MenuAnchor) => void;
-  style?: object;
+  onLongPick: (g: GuideGroup, anchor?: MenuAnchor) => void;
+  gap: number;
 }) {
   const ref = useRef<FlatList>(null);
   const listH = useRef(0);
@@ -751,8 +805,16 @@ function CategoryColumn({
     ref.current?.scrollToOffset({ offset: Math.max(0, (index - Math.floor(visible / 2) + 1) * itemH), animated: true });
   }, [index, itemH]);
 
+  // Only the rows whose focus or active state flipped re-render
+  const renderItem = useCallback(
+    ({ item: g, index: i }: { item: GuideGroup; index: number }) => (
+      <CategoryItem g={g} active={g.id === activeId} focused={focused && i === index} itemH={itemH} s={s} onPick={onPick} onLongPick={onLongPick} />
+    ),
+    [focused, index, activeId, itemH, s, onPick, onLongPick]
+  );
+
   return (
-    <View style={[{ width }, style]}>
+    <View style={{ width, marginRight: gap }}>
       <View style={{ height: headerH, justifyContent: 'center', paddingLeft: s(10) }}>
         <Text style={{ color: focused ? colors.text : colors.muted, fontSize: s(11), fontWeight: '800', letterSpacing: 1.1, fontFamily: fonts.regular }}>CATEGORIES</Text>
       </View>
@@ -765,37 +827,13 @@ function CategoryColumn({
           getItemLayout={(_d, i) => ({ length: itemH, offset: itemH * i, index: i })}
           contentContainerStyle={{ paddingVertical: s(4) }}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item: g, index: i }) => {
-            const active = g.id === activeId;
-            return (
-              <Focusable
-                focused={focused && i === index}
-                onPress={() => onPick(g.id)}
-                onLongPress={() => onLongPick(g)}
-                onContextMenu={(anchor) => onLongPick(g, anchor)}
-                style={{ height: itemH - s(2), marginHorizontal: s(4), marginVertical: s(1), borderRadius: s(radius.sm), flexDirection: 'row', alignItems: 'center', paddingHorizontal: s(9), backgroundColor: active ? colors.accentSoft : 'transparent' }}
-                focusStyle={{ backgroundColor: colors.focus }}
-              >
-                {({ focused: f }) => (
-                  <>
-                    {active && !f ? <View style={{ position: 'absolute', left: 0, top: s(8), bottom: s(8), width: s(3), borderRadius: 2, backgroundColor: colors.accent }} /> : null}
-                    <Icon
-                      name={g.id === 'fav' ? 'star' : g.id === 'recent' ? 'history' : g.id === ALL ? 'view-list' : g.favorite ? 'folder-star' : 'folder-outline'}
-                      size={s(13)}
-                      color={f ? colors.focusText : g.id === 'fav' || g.favorite ? colors.star : active ? colors.accent : colors.muted}
-                      style={{ marginRight: s(8) }}
-                    />
-                    <Text numberOfLines={1} style={{ flex: 1, color: f ? colors.focusText : active ? colors.text : colors.textDim, fontSize: s(12.5), fontWeight: active || f ? '700' : '600', fontFamily: fonts.regular }}>
-                      {g.name}
-                    </Text>
-                    <Text style={{ color: f ? colors.focusDim : colors.muted, fontSize: s(11), marginLeft: s(6), fontFamily: fonts.regular, fontVariant: ['tabular-nums'] }}>{g.channelIds.length}</Text>
-                  </>
-                )}
-              </Focusable>
-            );
-          }}
+          renderItem={renderItem}
+          extraData={renderItem}
+          initialNumToRender={14}
+          maxToRenderPerBatch={12}
+          windowSize={7}
         />
       </View>
     </View>
   );
-}
+});

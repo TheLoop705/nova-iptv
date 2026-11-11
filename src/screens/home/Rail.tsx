@@ -110,31 +110,21 @@ export const Rail = memo(function Rail({ rowKey, title, kindLabel, kind, categor
   );
   const page = (dir: 1 | -1) => listRef.current?.scrollToOffset({ offset: Math.max(0, offset.current + dir * Math.floor((m.viewW - m.padX * 2) / step) * step), animated: true });
 
-  const renderItem = ({ item: e, index }: { item: HomeEntry; index: number }) => (
-    <View style={{ marginRight: m.gap }}>{renderCard(e, index)}</View>
+  // Cards get the row's stable callbacks plus their position, so a focus move only redraws the two cards it touches.
+  const renderItem = useCallback(
+    ({ item: e, index }: { item: HomeEntry; index: number }) => (
+      <View style={{ marginRight: m.gap }}>
+        {e.type === 'more' ? (
+          <MoreCard entry={e} m={m} width={cardW} height={cardH} focused={index === focusCol} rowKey={rowKey} index={index} onPress={onPress} onHover={onHover} />
+        ) : wide ? (
+          <WideCard entry={e} m={m} focused={index === focusCol} rowKey={rowKey} index={index} onPress={onPress} onMenu={onMenu} onHover={onHover} />
+        ) : (
+          <HomePoster entry={e} m={m} focused={index === focusCol} rowKey={rowKey} index={index} onPress={onPress} onMenu={onMenu} onHover={onHover} />
+        )}
+      </View>
+    ),
+    [focusCol, m, wide, rowKey, cardW, cardH, onPress, onMenu, onHover]
   );
-  const renderCard = (e: HomeEntry, index: number) =>
-    e.type === 'more' ? (
-      <MoreCard entry={e} m={m} width={cardW} height={cardH} focused={index === focusCol} onPress={() => onPress(rowKey, index)} onHoverIn={onHover && (() => onHover(rowKey, index))} />
-    ) : wide ? (
-      <WideCard
-        entry={e}
-        m={m}
-        focused={index === focusCol}
-        onPress={() => onPress(rowKey, index)}
-        onMenu={(anchor) => onMenu(rowKey, index, anchor)}
-        onHoverIn={onHover && (() => onHover(rowKey, index))}
-      />
-    ) : (
-      <HomePoster
-        entry={e}
-        m={m}
-        focused={index === focusCol}
-        onPress={() => onPress(rowKey, index)}
-        onMenu={(anchor) => onMenu(rowKey, index, anchor)}
-        onHoverIn={onHover && (() => onHover(rowKey, index))}
-      />
-    );
 
   const body = (
     <>
@@ -195,17 +185,24 @@ const HomePoster = memo(function HomePoster({
   entry,
   m,
   focused,
+  rowKey,
+  index,
   onPress,
   onMenu,
-  onHoverIn,
+  onHover,
 }: {
   entry: Extract<HomeEntry, { type: 'movie' | 'series' }>;
   m: RailMetrics;
   focused: boolean;
-  onPress: () => void;
-  onMenu: (anchor?: MenuAnchor) => void;
-  onHoverIn?: () => void;
+  rowKey: string;
+  index: number;
+  onPress: (rowKey: string, col: number) => void;
+  onMenu: (rowKey: string, col: number, anchor?: MenuAnchor) => void;
+  onHover?: (rowKey: string, col: number) => void;
 }) {
+  const press = useCallback(() => onPress(rowKey, index), [onPress, rowKey, index]);
+  const menu = useCallback((anchor?: MenuAnchor) => onMenu(rowKey, index, anchor), [onMenu, rowKey, index]);
+  const hoverIn = useCallback(() => onHover?.(rowKey, index), [onHover, rowKey, index]);
   const ep = entry.type === 'series' ? entry.episode : undefined;
   const key = entry.type === 'movie' ? movieKey(entry.item) : ep ? episodeKey(ep) : undefined;
   const pr = useSettings((st) => (key ? st.vodProgress[key] : undefined));
@@ -222,9 +219,9 @@ const HomePoster = memo(function HomePoster({
       tv={m.tv}
       s={m.s}
       bare
-      onPress={onPress}
-      onMenu={onMenu}
-      onHoverIn={onHoverIn}
+      onPress={press}
+      onMenu={menu}
+      onHoverIn={onHover ? hoverIn : undefined}
     />
   );
 });
@@ -234,17 +231,25 @@ const WideCard = memo(function WideCard({
   entry,
   m,
   focused,
+  rowKey,
+  index,
   onPress,
   onMenu,
-  onHoverIn,
+  onHover,
 }: {
   entry: Extract<HomeEntry, { type: 'movie' | 'series' }>;
   m: RailMetrics;
   focused: boolean;
-  onPress: () => void;
-  onMenu: (anchor?: MenuAnchor) => void;
-  onHoverIn?: () => void;
+  rowKey: string;
+  index: number;
+  onPress: (rowKey: string, col: number) => void;
+  onMenu: (rowKey: string, col: number, anchor?: MenuAnchor) => void;
+  onHover?: (rowKey: string, col: number) => void;
 }) {
+  const press = useCallback(() => onPress(rowKey, index), [onPress, rowKey, index]);
+  const menu = useCallback((anchor?: MenuAnchor) => onMenu(rowKey, index, anchor), [onMenu, rowKey, index]);
+  const longPress = useCallback(() => onMenu(rowKey, index), [onMenu, rowKey, index]);
+  const hoverIn = useCallback(() => onHover?.(rowKey, index), [onHover, rowKey, index]);
   const { type } = useLayout();
   const k = m.tv ? m.s : (n: number) => n;
   const ep = entry.type === 'series' ? entry.episode : undefined;
@@ -263,10 +268,10 @@ const WideCard = memo(function WideCard({
   return (
     <Focusable
       focused={focused}
-      onPress={onPress}
-      onLongPress={() => onMenu()}
-      onContextMenu={onMenu}
-      onHoverIn={onHoverIn}
+      onPress={press}
+      onLongPress={longPress}
+      onContextMenu={menu}
+      onHoverIn={onHover ? hoverIn : undefined}
       accessibilityLabel={entry.item.name}
       style={{ width: m.wideW, height: m.wideH, borderRadius: k(radius.md) }}
       hoverStyle={{ transform: [{ scale: 1.03 }] }}
@@ -308,30 +313,36 @@ const WideCard = memo(function WideCard({
 });
 
 /** The last card of a long row: opens the whole category. */
-function MoreCard({
+const MoreCard = memo(function MoreCard({
   entry,
   m,
   width,
   height,
   focused,
+  rowKey,
+  index,
   onPress,
-  onHoverIn,
+  onHover,
 }: {
   entry: Extract<HomeEntry, { type: 'more' }>;
   m: RailMetrics;
   width: number;
   height: number;
   focused: boolean;
-  onPress: () => void;
-  onHoverIn?: () => void;
+  rowKey: string;
+  index: number;
+  onPress: (rowKey: string, col: number) => void;
+  onHover?: (rowKey: string, col: number) => void;
 }) {
+  const press = useCallback(() => onPress(rowKey, index), [onPress, rowKey, index]);
+  const hoverIn = useCallback(() => onHover?.(rowKey, index), [onHover, rowKey, index]);
   const { type } = useLayout();
   const k = m.tv ? m.s : (n: number) => n;
   return (
     <Focusable
       focused={focused}
-      onPress={onPress}
-      onHoverIn={onHoverIn}
+      onPress={press}
+      onHoverIn={onHover ? hoverIn : undefined}
       accessibilityLabel={`See all of ${entry.title}`}
       style={{ width, height, borderRadius: k(radius.md), backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', padding: k(8) }}
       hoverStyle={{ backgroundColor: colors.surface2, borderColor: colors.borderStrong }}
@@ -348,7 +359,7 @@ function MoreCard({
       )}
     </Focusable>
   );
-}
+});
 
 /** Mouse arrow at a row's end. */
 function Pager({ side, m, height, onPress }: { side: 'left' | 'right'; m: RailMetrics; height: number; onPress: () => void }) {
