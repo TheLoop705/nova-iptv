@@ -107,8 +107,22 @@ try {
     writeFileSync(join(output, 'windows-smoke.png'), (await desktop.window.webContents.capturePage()).toPNG());
   }
   const closed = new Promise((resolve) => desktop.window.once('closed', resolve));
-  desktop.window.close();
-  await closed;
+  if (phase === 'read') {
+    // A save that never answers must not keep the window on screen or the process alive.
+    await desktop.window.webContents.executeJavaScript('window.novaFlushSettings = () => new Promise(() => {}); true');
+    desktop.window.showInactive();
+    const started = Date.now();
+    desktop.window.close();
+    while (!desktop.isClosing() && Date.now() - started < 1000) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(desktop.isClosing(), true);
+    assert.equal(desktop.window.isVisible(), false);
+    assert.equal(desktop.window.webContents.isAudioMuted(), true);
+    await closed;
+    assert.ok(Date.now() - started < 4000, 'A stuck save delayed exit');
+  } else {
+    desktop.window.close();
+    await closed;
+  }
   console.log(`Windows smoke (${packaged ? 'packaged ' : ''}${phase}): ${JSON.stringify(result)}`);
   await desktop.close();
   fixture.closeAllConnections();

@@ -61,20 +61,26 @@ export function useMediaSession({ source, isLive, hasPrev, hasNext }: MediaSessi
     };
   }, [source, isLive, hasPrev, hasNext]);
 
-  // keep the OS scrubber in sync for movies and catch-up
-  const position = usePlayback((s) => s.position);
-  const duration = usePlayback((s) => s.duration);
-  const rate = usePlayback((s) => s.rate);
-  const status = usePlayback((s) => s.status);
+  // keep the OS scrubber in sync for movies and catch-up, without re-rendering VideoLayer on every tick
   useEffect(() => {
     const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
     if (!ms) return;
-    ms.playbackState = status === 'playing' ? 'playing' : status === 'paused' ? 'paused' : 'none';
-    if (isLive || !(duration > 0) || position > duration) return;
-    try {
-      ms.setPositionState({ duration, position, playbackRate: rate || 1 });
-    } catch {
-      // ignore invalid states while loading
-    }
-  }, [position, duration, rate, status, isLive]);
+    type PB = ReturnType<typeof usePlayback.getState>;
+    let sentAt = 0;
+    const sync = (st: PB, prev?: PB) => {
+      if (!prev || st.status !== prev.status) ms.playbackState = st.status === 'playing' ? 'playing' : st.status === 'paused' ? 'paused' : 'none';
+      if (isLive || !(st.duration > 0) || st.position > st.duration) return;
+      // the browser extrapolates from playbackRate: only push on a discontinuity, or every few seconds
+      const jump = !prev || st.status !== prev.status || st.rate !== prev.rate || st.duration !== prev.duration || Math.abs(st.position - prev.position) > 2;
+      if (!jump && Date.now() - sentAt < 5000) return;
+      sentAt = Date.now();
+      try {
+        ms.setPositionState({ duration: st.duration, position: st.position, playbackRate: st.rate || 1 });
+      } catch {
+        // ignore invalid states while loading
+      }
+    };
+    sync(usePlayback.getState());
+    return usePlayback.subscribe(sync);
+  }, [isLive]);
 }

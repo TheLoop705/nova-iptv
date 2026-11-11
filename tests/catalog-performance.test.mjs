@@ -9,7 +9,7 @@ const normalize = (value) => value && typeof value === 'object' && value.id != n
 test('streamed catalog preserves quotes, nested values and keyed provider responses across every boundary', async () => {
   const values = [{ id: '1', categoryId: 'a', name: 'Film \\"[] {}, 🎬', nested: { cast: ['a,b', '\\end'] } }, { id: '2', categoryId: 'b', name: 'Deux' }];
   for (const raw of [JSON.stringify(values), JSON.stringify({ 10: values[0], 20: values[1] })]) {
-    for (const size of [1, 2, 7, 31, 1024]) {
+    for (const size of [1, 2, 3, 5, 7, 31, 1024]) {
       const parser = new CatalogJsonParser(normalize);
       for (let i = 0; i < raw.length; i += size) await parser.push(raw.slice(i, i + size));
       assert.deepEqual(parser.finish(), values);
@@ -18,7 +18,7 @@ test('streamed catalog preserves quotes, nested values and keyed provider respon
 });
 
 test('malformed/truncated/error catalog responses cannot become successful empty catalogs', async () => {
-  for (const raw of ['[{"id":"1"}', '[{"id":"1"},]', '[,{"id":"1"}]', '{"error":"denied"}', '[]extra', '<html>bad provider</html>']) {
+  for (const raw of ['[{"id":"1"}', '[{"id":"1"},]', '[,{"id":"1"}]', '{"error":"denied"}', '[]extra', '<html>bad provider</html>', '[{"id":"1"}}', '[{"id":"1"}] x']) {
     const parser = new CatalogJsonParser(normalize);
     await assert.rejects(async () => { await parser.push(raw); parser.finish(); });
   }
@@ -26,6 +26,45 @@ test('malformed/truncated/error catalog responses cannot become successful empty
     const parser = new CatalogJsonParser(normalize);
     await parser.push(raw);
     assert.deepEqual(parser.finish(), []);
+  }
+});
+
+test('streamed catalog equals JSON.parse at every chunk boundary of escape, unicode and whitespace heavy documents', async () => {
+  const values = [
+    { id: 1, name: 'a\\', note: '\\"', tail: 'x\\\\"],}{[' },
+    { id: '2', name: 'é🎬 "q" \n\t ', nested: [[{ deep: ['}', ']', ',', '"'] }], {}, []], n: -1.5e3, t: true, f: false, z: null },
+    'bare "string", with [brackets]',
+    42,
+    null,
+    [{ id: 'in-array' }, ','],
+    { id: '3', '': '', 'k,ey"]': { '\\': '\\' } },
+  ];
+  const keyed = Object.fromEntries(values.map((value, i) => [`k"${i},]\\`, value]));
+  const identity = (value) => value === null ? undefined : value;
+  const escaped = JSON.stringify(values).replace(/[\u0080-￿]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  const docs = [
+    JSON.stringify(values),
+    '﻿ \n' + JSON.stringify(values, null, 2) + '\r\n\t ',
+    escaped,
+    JSON.stringify(keyed),
+    ' ' + JSON.stringify(keyed, null, '\t') + '\n',
+  ];
+  assert.notEqual(escaped, docs[0]);
+  for (const raw of docs) {
+    const expected = Object.values(JSON.parse(raw.replace(/^﻿/, ''))).filter((value) => value !== null);
+    assert.equal(expected.length, values.length - 1);
+    // Two chunks at every split point, then a short middle chunk starting at every position.
+    for (let i = 0; i <= raw.length; i++) {
+      const parser = new CatalogJsonParser(identity);
+      await parser.push(raw.slice(0, i));
+      await parser.push(raw.slice(i));
+      assert.deepEqual(parser.finish(), expected, `split at ${i}`);
+      for (const width of [1, 2, 6]) {
+        const three = new CatalogJsonParser(identity);
+        for (const part of [raw.slice(0, i), raw.slice(i, i + width), raw.slice(i + width)]) await three.push(part);
+        assert.deepEqual(three.finish(), expected, `split at ${i}+${width}`);
+      }
+    }
   }
 });
 

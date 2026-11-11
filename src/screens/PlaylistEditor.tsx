@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import QRCode from 'react-native-qrcode-svg';
 import { colors, fonts, useLayout } from '../theme';
 import { useUI } from '../store/ui';
 import { useSettings } from '../store/settings';
@@ -18,6 +17,12 @@ import { pickTextFile } from '../services/filepick';
 import { uid } from '../utils/format';
 import { focusScrollOffset } from '../utils/focusScroll';
 import { PlaylistPairing, type PairedPlaylist } from '../../modules/playlist-pairing';
+
+/** Loaded on first use: keeps react-native-svg and the QR encoder out of app startup. */
+function PairingQr({ value, size }: { value: string; size: number }) {
+  const QRCode = require('react-native-qrcode-svg').default as typeof import('react-native-qrcode-svg').default;
+  return <QRCode value={value} size={size} color={colors.focusText} backgroundColor={colors.focus} />;
+}
 
 type Kind = 'm3u' | 'xtream' | 'file';
 
@@ -332,7 +337,7 @@ export function PlaylistEditor() {
                   <>
                     {pairing.status === 'ready' ? (
                       <View style={{ padding: k(6), borderRadius: k(8), backgroundColor: colors.focus }}>
-                        <QRCode value={pairing.url} size={tv ? k(96) : k(112)} color={colors.focusText} backgroundColor={colors.focus} />
+                        <PairingQr value={pairing.url} size={tv ? k(96) : k(112)} />
                       </View>
                     ) : (
                       <View style={{ width: tv ? k(108) : k(126), height: tv ? k(108) : k(126), borderRadius: k(9), alignItems: 'center', justifyContent: 'center', backgroundColor: focused ? colors.surface2 : colors.bgElevated }}>

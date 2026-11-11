@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AccessibilityInfo, Animated, Easing, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 
 export interface HoverTitleProps {
@@ -8,17 +8,37 @@ export interface HoverTitleProps {
   containerStyle?: StyleProp<ViewStyle>;
 }
 
+// One reduce-motion answer for every title, instead of a native call and a listener per instance.
+let reduceMotion = true; // until the platform answers
+let started = false;
+const subscribers = new Set<() => void>();
+const setReduceMotion = (value: boolean) => {
+  if (value === reduceMotion) return;
+  reduceMotion = value;
+  subscribers.forEach((notify) => notify());
+};
+const subscribeReduceMotion = (notify: () => void) => {
+  if (!started) {
+    started = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => {});
+    AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+  }
+  subscribers.add(notify);
+  return () => { subscribers.delete(notify); };
+};
+const noSubscription = () => () => {};
+const getReduceMotion = () => reduceMotion;
+
 export function HoverTitle({ text, active = false, style, containerStyle }: HoverTitleProps) {
   const [viewport, setViewport] = useState(0);
+  const viewportRef = useRef(0);
   const [label, setLabel] = useState({ text: '', width: 0 });
-  const [reduced, setReduced] = useState(true);
+  // Only a focused title needs the answer or its own width: the rest render once and stay out of it.
+  const reduced = useSyncExternalStore(active ? subscribeReduceMotion : noSubscription, getReduceMotion);
   const x = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    let alive = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((value) => { if (alive) setReduced(value); }).catch(() => {});
-    const listener = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduced);
-    return () => { alive = false; listener.remove(); };
-  }, []);
+    if (active) setViewport(viewportRef.current);
+  }, [active]);
   const width = label.text === text ? label.width : 0;
   const distance = Math.max(0, width - viewport);
   const moving = active && !reduced && viewport > 0 && distance > 1;
@@ -37,7 +57,11 @@ export function HoverTitle({ text, active = false, style, containerStyle }: Hove
   }, [text, moving, distance, x]);
   return (
     <View testID="hover-title" accessibilityLabel={text}
-      onLayout={(e) => setViewport(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        viewportRef.current = w;
+        if (active) setViewport(w);
+      }}
       style={[containerStyle, { minWidth: 0, overflow: 'hidden' }]}>
       {active && !reduced ? (
         <Text key={text} accessible={false} pointerEvents="none" numberOfLines={1}

@@ -114,18 +114,26 @@ export async function startDesktop({ show = true, dist = app.isPackaged ? join(r
 
   let closing = false;
   window.on('close', (event) => {
-    if (closing) return;
+    if (closing) return; // A second request closes at once.
     event.preventDefault();
     closing = true;
-    let timeout;
-    // Settings are debounced in the web app. Finish saving before stopping its server.
-    Promise.race([
-      window.webContents.executeJavaScript('window.novaFlushSettings?.()'),
-      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Save timed out')), 5000); }),
-    ]).catch((error) => console.error('Could not flush settings on exit:', error.message)).finally(() => {
-      clearTimeout(timeout);
+    const contents = window.webContents;
+    let timer;
+    const finish = () => {
+      clearTimeout(timer);
       if (!window.isDestroyed()) window.destroy();
-    });
+    };
+    // Settings are debounced in the web app. Finish saving before stopping its server,
+    // but look closed at once: no picture and no sound while the save runs.
+    contents.setAudioMuted(true);
+    contents.setBackgroundThrottling(false); // A hidden page gets 1 s timers; the save yields with setTimeout(0).
+    window.hide();
+    if (contents.isCrashed()) return finish(); // Nothing left to flush.
+    timer = setTimeout(finish, 2000);
+    contents.once('render-process-gone', finish);
+    contents.executeJavaScript('window.novaFlushSettings?.()')
+      .catch((error) => console.error('Could not flush settings on exit:', error.message))
+      .finally(finish);
   });
 
   const close = async () => {
@@ -141,5 +149,5 @@ export async function startDesktop({ show = true, dist = app.isPackaged ? join(r
     await close();
     throw error;
   }
-  return { window, backendOrigin, close };
+  return { window, backendOrigin, close, isClosing: () => closing };
 }

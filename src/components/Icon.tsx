@@ -1,5 +1,6 @@
 import React from 'react';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+// Per-set entry point: the package barrel pulls every icon set (and its font) into the bundle.
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import type { StyleProp, TextStyle } from 'react-native';
 
 export type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];

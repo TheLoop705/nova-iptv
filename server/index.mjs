@@ -251,6 +251,10 @@ async function readText(stream, limit) {
 const COMPRESSIBLE = /json|xml|text\/|mpegurl|javascript/;
 const acceptsGzip = (req) => /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
 
+// Xtream API JSON and XMLTV guides: large text that providers can usually gzip. Deliberately an
+// allowlist - playlists (.m3u/.m3u8/get.php) and streams must keep their current handling.
+const GZIP_UPSTREAM = /\/(player_api|xmltv)\.php$|\.(xml|json)$/i;
+
 const PASS_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'content-encoding', 'last-modified', 'etag', 'cache-control', 'expires'];
 
 async function handleProxy(req, res, params) {
@@ -268,6 +272,7 @@ async function handleProxy(req, res, params) {
   res.on('close', () => controller.abort());
   const headers = { 'user-agent': ua, accept: '*/*' };
   if (req.headers.range) headers.range = req.headers.range;
+  else if (req.method === 'GET' && GZIP_UPSTREAM.test(url.pathname)) headers['accept-encoding'] = 'gzip';
 
   let upstream;
   let finalUrl;
@@ -310,6 +315,13 @@ async function handleProxy(req, res, params) {
 
   const out = { ...CORS, 'x-final-url': finalUrl.href };
   for (const h of PASS_HEADERS) if (upstream.headers[h]) out[h] = upstream.headers[h];
+  // We asked the provider for gzip; a client that did not (the desktop shell requests identity) gets it decoded here.
+  const upstreamEnc = String(out['content-encoding'] || '').toLowerCase();
+  const gunzip = !!headers['accept-encoding'] && (upstreamEnc === 'gzip' || upstreamEnc === 'x-gzip') && !acceptsGzip(req);
+  if (gunzip) {
+    delete out['content-encoding'];
+    delete out['content-length'];
+  }
   const gzip = status === 200 && req.method !== 'HEAD' && !out['content-encoding'] && !out['content-range'] && COMPRESSIBLE.test(ctype) && acceptsGzip(req);
   if (gzip) {
     delete out['content-length'];
@@ -322,6 +334,14 @@ async function handleProxy(req, res, params) {
     return res.end();
   }
   upstream.on('error', () => res.destroy());
+  if (gunzip) {
+    const unzip = createGunzip();
+    let bytes = 0;
+    upstream.on('data', (chunk) => { bytes += chunk.length; });
+    // A bodyless reply labelled gzip is an empty body, not a broken one.
+    unzip.on('error', () => (bytes ? res.destroy() : res.end()));
+    return upstream.pipe(unzip).pipe(res);
+  }
   if (!gzip) return upstream.pipe(res);
   const z = createGzip({ level: 5 });
   z.on('error', () => res.destroy());
